@@ -1,4 +1,4 @@
-package main
+package zotero
 
 import (
 	"bytes"
@@ -12,21 +12,23 @@ import (
 
 const baseURL = "https://api.zotero.org"
 
-type ZoteroClient struct {
+// Client is a Zotero Web API client.
+type Client struct {
 	APIKey     string
-	UserID    string
+	UserID     string
 	HTTPClient *http.Client
 }
 
-func NewZoteroClient(cfg *Config) *ZoteroClient {
-	return &ZoteroClient{
-		APIKey:     cfg.APIKey,
-		UserID:    cfg.UserID,
+// NewClient creates a new Zotero API client.
+func NewClient(apiKey, userID string) *Client {
+	return &Client{
+		APIKey:     apiKey,
+		UserID:     userID,
 		HTTPClient: &http.Client{},
 	}
 }
 
-func (c *ZoteroClient) doRequest(endpoint string, params url.Values, accept string) ([]byte, error) {
+func (c *Client) doRequest(endpoint string, params url.Values, accept string) ([]byte, error) {
 	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
 	if len(params) > 0 {
 		u += "?" + params.Encode()
@@ -44,86 +46,26 @@ func (c *ZoteroClient) doRequest(endpoint string, params url.Values, accept stri
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("APIリクエストに失敗: %w", err)
+		return nil, fmt.Errorf("API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("レスポンスの読み込みに失敗: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("APIエラー (HTTP %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 
 	return body, nil
 }
 
-// Item represents a Zotero item
-type Item struct {
-	Key  string   `json:"key"`
-	Data ItemData `json:"data"`
-}
-
-type ItemData struct {
-	ItemType         string    `json:"itemType"`
-	Title            string    `json:"title"`
-	Creators         []Creator `json:"creators"`
-	Date             string    `json:"date"`
-	AbstractNote     string    `json:"abstractNote"`
-	URL              string    `json:"url"`
-	DOI              string    `json:"DOI"`
-	Tags             []Tag     `json:"tags"`
-	PublicationTitle string    `json:"publicationTitle"`
-	Note             string    `json:"note,omitempty"`
-	ContentType      string    `json:"contentType,omitempty"`
-	Filename         string    `json:"filename,omitempty"`
-	ParentItem       string    `json:"parentItem,omitempty"`
-}
-
-// FullTextResponse represents the response from the fulltext endpoint
-type FullTextResponse struct {
-	Content      string `json:"content"`
-	IndexedPages int    `json:"indexedPages"`
-	TotalPages   int    `json:"totalPages"`
-}
-
-// ContextBundle holds all information about an item for the context command
-type ContextBundle struct {
-	Item        *Item             `json:"item"`
-	FullText    *FullTextResponse `json:"fullText,omitempty"`
-	Notes       []Item            `json:"notes,omitempty"`
-	Attachments []Item            `json:"attachments,omitempty"`
-}
-
-type Creator struct {
-	CreatorType string `json:"creatorType"`
-	FirstName   string `json:"firstName"`
-	LastName    string `json:"lastName"`
-	Name        string `json:"name"`
-}
-
-type Tag struct {
-	Tag string `json:"tag"`
-}
-
-type Collection struct {
-	Key  string         `json:"key"`
-	Data CollectionData `json:"data"`
-}
-
-type CollectionData struct {
-	Key              string `json:"key"`
-	Name             string `json:"name"`
-	ParentCollection interface{} `json:"parentCollection"`
-	NumItems         int    `json:"numItems"`
-}
-
-func (c *ZoteroClient) doWriteRequest(method, endpoint string, body interface{}) ([]byte, error) {
+func (c *Client) doWriteRequest(method, endpoint string, body interface{}) ([]byte, error) {
 	jsonData, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("JSONの作成に失敗: %w", err)
+		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}
 
 	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
@@ -137,23 +79,24 @@ func (c *ZoteroClient) doWriteRequest(method, endpoint string, body interface{})
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("APIリクエストに失敗: %w", err)
+		return nil, fmt.Errorf("API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("レスポンスの読み込みに失敗: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("APIエラー (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	return respBody, nil
 }
 
-func (c *ZoteroClient) SearchItems(query string, tag string) ([]Item, error) {
+// SearchItems searches for items by query and optional tag filter.
+func (c *Client) SearchItems(query string, tag string) ([]Item, error) {
 	params := url.Values{}
 	if query != "" {
 		params.Set("q", query)
@@ -172,12 +115,13 @@ func (c *ZoteroClient) SearchItems(query string, tag string) ([]Item, error) {
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-func (c *ZoteroClient) ListItems(collectionKey string, limit int) ([]Item, error) {
+// ListItems lists items, optionally filtered by collection.
+func (c *Client) ListItems(collectionKey string, limit int) ([]Item, error) {
 	endpoint := "/items"
 	if collectionKey != "" {
 		endpoint = fmt.Sprintf("/collections/%s/items", collectionKey)
@@ -196,12 +140,13 @@ func (c *ZoteroClient) ListItems(collectionKey string, limit int) ([]Item, error
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-func (c *ZoteroClient) GetItem(itemKey string) (*Item, error) {
+// GetItem retrieves a single item by key.
+func (c *Client) GetItem(itemKey string) (*Item, error) {
 	body, err := c.doRequest(fmt.Sprintf("/items/%s", itemKey), nil, "application/json")
 	if err != nil {
 		return nil, err
@@ -209,12 +154,13 @@ func (c *ZoteroClient) GetItem(itemKey string) (*Item, error) {
 
 	var item Item
 	if err := json.Unmarshal(body, &item); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return &item, nil
 }
 
-func (c *ZoteroClient) GetBibTeX(query string, collectionKey string, all bool) (string, error) {
+// GetBibTeX exports items as BibTeX.
+func (c *Client) GetBibTeX(query string, collectionKey string, all bool) (string, error) {
 	endpoint := "/items"
 	if collectionKey != "" {
 		endpoint = fmt.Sprintf("/collections/%s/items", collectionKey)
@@ -238,7 +184,8 @@ func (c *ZoteroClient) GetBibTeX(query string, collectionKey string, all bool) (
 	return string(body), nil
 }
 
-func (c *ZoteroClient) ListCollections() ([]Collection, error) {
+// ListCollections retrieves all collections.
+func (c *Client) ListCollections() ([]Collection, error) {
 	body, err := c.doRequest("/collections", nil, "application/json")
 	if err != nil {
 		return nil, err
@@ -246,12 +193,13 @@ func (c *ZoteroClient) ListCollections() ([]Collection, error) {
 
 	var collections []Collection
 	if err := json.Unmarshal(body, &collections); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return collections, nil
 }
 
-func (c *ZoteroClient) GetFullText(itemKey string) (*FullTextResponse, error) {
+// GetFullText retrieves the full-text content of an item.
+func (c *Client) GetFullText(itemKey string) (*FullTextResponse, error) {
 	body, err := c.doRequest(fmt.Sprintf("/items/%s/fulltext", itemKey), nil, "application/json")
 	if err != nil {
 		return nil, err
@@ -259,12 +207,13 @@ func (c *ZoteroClient) GetFullText(itemKey string) (*FullTextResponse, error) {
 
 	var ft FullTextResponse
 	if err := json.Unmarshal(body, &ft); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return &ft, nil
 }
 
-func (c *ZoteroClient) FullTextSearch(query string, tag string, limit int) ([]Item, error) {
+// FullTextSearch searches items including full-text content.
+func (c *Client) FullTextSearch(query string, tag string, limit int) ([]Item, error) {
 	params := url.Values{}
 	if query != "" {
 		params.Set("q", query)
@@ -287,12 +236,13 @@ func (c *ZoteroClient) FullTextSearch(query string, tag string, limit int) ([]It
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-func (c *ZoteroClient) GetChildren(itemKey string) ([]Item, error) {
+// GetChildren retrieves child items (notes, attachments) of an item.
+func (c *Client) GetChildren(itemKey string) ([]Item, error) {
 	body, err := c.doRequest(fmt.Sprintf("/items/%s/children", itemKey), nil, "application/json")
 	if err != nil {
 		return nil, err
@@ -300,13 +250,13 @@ func (c *ZoteroClient) GetChildren(itemKey string) ([]Item, error) {
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-func (c *ZoteroClient) CreateNote(parentKey, content string, tags []string) (string, error) {
-	// Wrap in <p> if not already HTML
+// CreateNote creates a note attached to a parent item.
+func (c *Client) CreateNote(parentKey, content string, tags []string) (string, error) {
 	if !strings.HasPrefix(strings.TrimSpace(content), "<") {
 		content = "<p>" + strings.ReplaceAll(content, "\n", "</p>\n<p>") + "</p>"
 	}
@@ -331,24 +281,25 @@ func (c *ZoteroClient) CreateNote(parentKey, content string, tags []string) (str
 	}
 
 	var result struct {
-		Successful map[string]Item `json:"successful"`
+		Successful map[string]Item        `json:"successful"`
 		Failed     map[string]interface{} `json:"failed"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("レスポンスのパースに失敗: %w", err)
+		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	if len(result.Failed) > 0 {
-		return "", fmt.Errorf("ノートの作成に失敗: %v", result.Failed)
+		return "", fmt.Errorf("failed to create note: %v", result.Failed)
 	}
 
 	for _, item := range result.Successful {
 		return item.Key, nil
 	}
-	return "", fmt.Errorf("ノートの作成結果が不明です")
+	return "", fmt.Errorf("unexpected empty response")
 }
 
-func (c *ZoteroClient) ListItemsByTag(tag string, limit int) ([]Item, error) {
+// ListItemsByTag lists items filtered by tag.
+func (c *Client) ListItemsByTag(tag string, limit int) ([]Item, error) {
 	params := url.Values{}
 	params.Set("tag", tag)
 	if limit <= 0 {
@@ -366,12 +317,13 @@ func (c *ZoteroClient) ListItemsByTag(tag string, limit int) ([]Item, error) {
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-func (c *ZoteroClient) GetItemsByKeys(keys []string) ([]Item, error) {
+// GetItemsByKeys retrieves multiple items by their keys.
+func (c *Client) GetItemsByKeys(keys []string) ([]Item, error) {
 	params := url.Values{}
 	params.Set("itemKey", strings.Join(keys, ","))
 	params.Set("limit", fmt.Sprintf("%d", len(keys)))
@@ -383,13 +335,41 @@ func (c *ZoteroClient) GetItemsByKeys(keys []string) ([]Item, error) {
 
 	var items []Item
 	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("JSONのパースに失敗: %w", err)
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 	return items, nil
 }
 
-// Helper functions for display
-func formatAuthors(creators []Creator) string {
+// GetContext retrieves all information about an item (metadata, fulltext, notes, attachments).
+func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
+	item, err := c.GetItem(itemKey)
+	if err != nil {
+		return nil, err
+	}
+
+	ft, _ := c.GetFullText(itemKey)
+
+	children, _ := c.GetChildren(itemKey)
+	var notes, attachments []Item
+	for _, child := range children {
+		switch child.Data.ItemType {
+		case "note":
+			notes = append(notes, child)
+		case "attachment":
+			attachments = append(attachments, child)
+		}
+	}
+
+	return &ContextBundle{
+		Item:        item,
+		FullText:    ft,
+		Notes:       notes,
+		Attachments: attachments,
+	}, nil
+}
+
+// FormatAuthors formats a list of creators into a display string.
+func FormatAuthors(creators []Creator) string {
 	var names []string
 	for _, c := range creators {
 		if c.Name != "" {
@@ -407,7 +387,8 @@ func formatAuthors(creators []Creator) string {
 	return strings.Join(names, "; ")
 }
 
-func formatTags(tags []Tag) string {
+// FormatTags formats a list of tags into a display string.
+func FormatTags(tags []Tag) string {
 	var t []string
 	for _, tag := range tags {
 		t = append(t, tag.Tag)
@@ -418,7 +399,8 @@ func formatTags(tags []Tag) string {
 	return strings.Join(t, ", ")
 }
 
-func truncate(s string, max int) string {
+// Truncate truncates a string to a maximum number of runes.
+func Truncate(s string, max int) string {
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s
