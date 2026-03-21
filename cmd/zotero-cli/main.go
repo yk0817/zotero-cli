@@ -11,7 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
-	"zotero-cli/zotero"
+	"github.com/yk0817/zotero-cli/zotero"
 )
 
 // Config holds the API credentials.

@@ -100,7 +100,7 @@ package main
 
 import (
 	"fmt"
-	"zotero-cli/zotero"
+	"github.com/yk0817/zotero-cli/zotero"
 )
 
 func main() {

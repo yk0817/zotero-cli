@@ -1,4 +1,4 @@
-module zotero-cli
+module github.com/yk0817/zotero-cli
 
 go 1.26.1
 
