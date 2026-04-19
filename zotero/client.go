@@ -368,6 +368,149 @@ func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
 	}, nil
 }
 
+// doFormRequest sends a form-encoded POST request to the Zotero API.
+func (c *Client) doFormRequest(endpoint string, formData url.Values, extraHeaders map[string]string) ([]byte, error) {
+	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
+	req, err := http.NewRequest("POST", u, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Zotero-API-Key", c.APIKey)
+	req.Header.Set("Zotero-API-Version", "3")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+// CreateAttachment creates an attachment item in Zotero.
+func (c *Client) CreateAttachment(parentKey, filename, title, contentType string, tags []string) (string, error) {
+	tagObjs := []Tag{}
+	for _, t := range tags {
+		tagObjs = append(tagObjs, Tag{Tag: t})
+	}
+
+	if title == "" {
+		title = filename
+	}
+
+	attachItem := []map[string]interface{}{
+		{
+			"itemType":    "attachment",
+			"linkMode":    "imported_file",
+			"title":       title,
+			"filename":    filename,
+			"contentType": contentType,
+			"tags":        tagObjs,
+		},
+	}
+	if parentKey != "" {
+		attachItem[0]["parentItem"] = parentKey
+	}
+
+	respBody, err := c.doWriteRequest("POST", "/items", attachItem)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Successful map[string]Item        `json:"successful"`
+		Failed     map[string]interface{} `json:"failed"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if len(result.Failed) > 0 {
+		return "", fmt.Errorf("failed to create attachment: %v", result.Failed)
+	}
+
+	for _, item := range result.Successful {
+		return item.Key, nil
+	}
+	return "", fmt.Errorf("unexpected empty response")
+}
+
+// GetUploadAuthorization requests authorization to upload a file to an attachment item.
+func (c *Client) GetUploadAuthorization(itemKey, filename string, filesize int64, md5hex string, mtime int64) (*UploadAuthorization, error) {
+	formData := url.Values{}
+	formData.Set("md5", md5hex)
+	formData.Set("filename", filename)
+	formData.Set("filesize", fmt.Sprintf("%d", filesize))
+	formData.Set("mtime", fmt.Sprintf("%d", mtime))
+
+	extraHeaders := map[string]string{
+		"If-None-Match": "*",
+	}
+
+	respBody, err := c.doFormRequest(fmt.Sprintf("/items/%s/file", itemKey), formData, extraHeaders)
+	if err != nil {
+		return nil, err
+	}
+
+	var auth UploadAuthorization
+	if err := json.Unmarshal(respBody, &auth); err != nil {
+		return nil, fmt.Errorf("failed to parse upload authorization: %w", err)
+	}
+	return &auth, nil
+}
+
+// UploadFileContent uploads the file content to the authorized URL.
+func (c *Client) UploadFileContent(auth *UploadAuthorization, fileContent []byte) error {
+	var buf bytes.Buffer
+	buf.WriteString(auth.Prefix)
+	buf.Write(fileContent)
+	buf.WriteString(auth.Suffix)
+
+	req, err := http.NewRequest("POST", auth.URL, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", auth.ContentType)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// RegisterUpload completes the upload process by registering the upload key.
+func (c *Client) RegisterUpload(itemKey, uploadKey string) error {
+	formData := url.Values{}
+	formData.Set("upload", uploadKey)
+
+	extraHeaders := map[string]string{
+		"If-None-Match": "*",
+	}
+
+	_, err := c.doFormRequest(fmt.Sprintf("/items/%s/file", itemKey), formData, extraHeaders)
+	return err
+}
+
 // FormatAuthors formats a list of creators into a display string.
 func FormatAuthors(creators []Creator) string {
 	var names []string

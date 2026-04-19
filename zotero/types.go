@@ -57,6 +57,15 @@ type FullTextResponse struct {
 	TotalPages   int    `json:"totalPages"`
 }
 
+// UploadAuthorization holds the response from the file upload authorization endpoint.
+type UploadAuthorization struct {
+	URL         string `json:"url"`
+	UploadKey   string `json:"uploadKey"`
+	Prefix      string `json:"prefix"`
+	Suffix      string `json:"suffix"`
+	ContentType string `json:"contentType"`
+}
+
 // ContextBundle holds all information about an item for the context command.
 type ContextBundle struct {
 	Item        *Item             `json:"item"`
