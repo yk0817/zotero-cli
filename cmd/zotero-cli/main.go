@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,14 +35,26 @@ func configPath() string {
 func loadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath())
 	if err != nil {
-		return nil, fmt.Errorf("config not found. Run 'zotero-cli config' to set up")
+		return nil, &CLIError{
+			Code:       ErrCodeConfigNotFound,
+			Message:    "config not found",
+			Suggestion: "Run 'zotero-cli config' to set up",
+		}
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, &CLIError{
+			Code:       ErrCodeConfigInvalid,
+			Message:    fmt.Sprintf("failed to read config: %v", err),
+			Suggestion: "Check config file format or run 'zotero-cli config' to re-create",
+		}
 	}
 	if cfg.APIKey == "" || cfg.UserID == "" {
-		return nil, fmt.Errorf("API key or user ID not set. Run 'zotero-cli config' to set up")
+		return nil, &CLIError{
+			Code:       ErrCodeConfigInvalid,
+			Message:    "API key or user ID not set",
+			Suggestion: "Run 'zotero-cli config' to set up",
+		}
 	}
 	return &cfg, nil
 }
@@ -68,11 +83,18 @@ func main() {
 		Use:   "zotero-cli",
 		Short: "Zotero Web API CLI client",
 	}
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
+
+	rootCmd.PersistentFlags().StringVar(&outputFormat, "output", "text", "Output format: text or json")
 
 	// config command
 	configCmd := &cobra.Command{
 		Use:   "config",
 		Short: "Set up API key and user ID",
+		Annotations: map[string]string{
+			"args": "none (interactive prompt)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reader := bufio.NewReader(os.Stdin)
 
@@ -85,12 +107,21 @@ func main() {
 			apiKey = strings.TrimSpace(apiKey)
 
 			if userID == "" || apiKey == "" {
-				return fmt.Errorf("user ID and API key are required")
+				return &CLIError{
+					Code:    ErrCodeValidation,
+					Message: "user ID and API key are required",
+				}
 			}
 
 			cfg := &Config{APIKey: apiKey, UserID: userID}
 			if err := saveConfig(cfg); err != nil {
 				return err
+			}
+			if isJSON() {
+				return printJSON(map[string]string{
+					"configPath": configPath(),
+					"message":    "Config saved",
+				})
 			}
 			fmt.Printf("Config saved: %s\n", configPath())
 			return nil
@@ -104,12 +135,18 @@ func main() {
 		Use:   "search <query>",
 		Short: "Search items by keyword",
 		Args:  cobra.MinimumNArgs(1),
+		Annotations: map[string]string{
+			"args": "query: search keyword (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient()
 			if err != nil {
 				return err
 			}
 			query := strings.Join(args, " ")
+			if err := sanitizeInput(query); err != nil {
+				return err
+			}
 			items, err := client.SearchItems(query, searchTag)
 			if err != nil {
 				return err
@@ -123,6 +160,12 @@ func main() {
 					}
 				}
 				items = filtered
+			}
+			if isJSON() {
+				if items == nil {
+					items = []zotero.Item{}
+				}
+				return printJSON(items)
 			}
 			if len(items) == 0 {
 				fmt.Println("No results found")
@@ -141,6 +184,9 @@ func main() {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List items",
+		Annotations: map[string]string{
+			"args": "none",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient()
 			if err != nil {
@@ -149,6 +195,12 @@ func main() {
 			items, err := client.ListItems(listCollection, listLimit)
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				if items == nil {
+					items = []zotero.Item{}
+				}
+				return printJSON(items)
 			}
 			if len(items) == 0 {
 				fmt.Println("No items found")
@@ -166,7 +218,13 @@ func main() {
 		Use:   "get <itemKey>",
 		Short: "Show item details",
 		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric item key (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
 			client, err := newClient()
 			if err != nil {
 				return err
@@ -174,6 +232,9 @@ func main() {
 			item, err := client.GetItem(args[0])
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				return printJSON(item)
 			}
 			printItemDetail(item)
 			return nil
@@ -186,6 +247,9 @@ func main() {
 	bibtexCmd := &cobra.Command{
 		Use:   "bibtex [query]",
 		Short: "Export as BibTeX",
+		Annotations: map[string]string{
+			"args": "query: search keyword (optional, requires --all or --collection if omitted)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient()
 			if err != nil {
@@ -193,11 +257,17 @@ func main() {
 			}
 			query := strings.Join(args, " ")
 			if query == "" && !bibtexAll && bibtexCollection == "" {
-				return fmt.Errorf("specify a query, --all, or --collection")
+				return &CLIError{
+					Code:    ErrCodeInvalidArgument,
+					Message: "specify a query, --all, or --collection",
+				}
 			}
 			bib, err := client.GetBibTeX(query, bibtexCollection, bibtexAll)
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				return printJSON(map[string]string{"bibtex": bib})
 			}
 			fmt.Print(bib)
 			return nil
@@ -210,6 +280,9 @@ func main() {
 	collectionsCmd := &cobra.Command{
 		Use:   "collections",
 		Short: "List collections",
+		Annotations: map[string]string{
+			"args": "none",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient()
 			if err != nil {
@@ -218,6 +291,12 @@ func main() {
 			collections, err := client.ListCollections()
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				if collections == nil {
+					collections = []zotero.Collection{}
+				}
+				return printJSON(collections)
 			}
 			if len(collections) == 0 {
 				fmt.Println("No collections found")
@@ -234,7 +313,13 @@ func main() {
 		Use:   "fulltext <itemKey>",
 		Short: "Show full text of an item",
 		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric item key (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
 			client, err := newClient()
 			if err != nil {
 				return err
@@ -243,6 +328,28 @@ func main() {
 			item, err := client.GetItem(args[0])
 			if err != nil {
 				return err
+			}
+
+			ft, ftErr := client.GetFullText(args[0])
+
+			if isJSON() {
+				type fulltextData struct {
+					Item     *zotero.Item              `json:"item"`
+					FullText *zotero.FullTextResponse   `json:"fullText,omitempty"`
+				}
+				result := fulltextData{Item: item}
+				if ftErr == nil {
+					content := ft.Content
+					if fulltextMaxChars > 0 && len(content) > fulltextMaxChars {
+						content = content[:fulltextMaxChars]
+					}
+					result.FullText = &zotero.FullTextResponse{
+						Content:      content,
+						IndexedPages: ft.IndexedPages,
+						TotalPages:   ft.TotalPages,
+					}
+				}
+				return printJSON(result)
 			}
 
 			fmt.Println("=== METADATA ===")
@@ -259,9 +366,8 @@ func main() {
 				fmt.Println(item.Data.AbstractNote)
 			}
 
-			ft, err := client.GetFullText(args[0])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "\nFull text not available: %v\n", err)
+			if ftErr != nil {
+				fmt.Fprintf(os.Stderr, "\nFull text not available: %v\n", ftErr)
 				return nil
 			}
 
@@ -288,15 +394,27 @@ func main() {
 		Use:   "fullsearch <query>",
 		Short: "Full-text search",
 		Args:  cobra.MinimumNArgs(1),
+		Annotations: map[string]string{
+			"args": "query: search keyword (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient()
 			if err != nil {
 				return err
 			}
 			query := strings.Join(args, " ")
+			if err := sanitizeInput(query); err != nil {
+				return err
+			}
 			items, err := client.FullTextSearch(query, fullsearchTag, fullsearchLimit)
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				if items == nil {
+					items = []zotero.Item{}
+				}
+				return printJSON(items)
 			}
 			if len(items) == 0 {
 				fmt.Println("No results found")
@@ -316,7 +434,13 @@ func main() {
 		Use:   "context <itemKey>",
 		Short: "Show all information about an item",
 		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric item key (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
 			client, err := newClient()
 			if err != nil {
 				return err
@@ -328,7 +452,10 @@ func main() {
 				return err
 			}
 
-			if contextJSON {
+			if isJSON() || contextJSON {
+				if isJSON() {
+					return printJSON(bundle)
+				}
 				data, err := json.MarshalIndent(bundle, "", "  ")
 				if err != nil {
 					return err
@@ -374,19 +501,22 @@ func main() {
 		},
 	}
 	contextCmd.Flags().BoolVar(&contextWithNotes, "with-notes", false, "Include notes")
-	contextCmd.Flags().BoolVar(&contextJSON, "json", false, "Output as JSON")
+	contextCmd.Flags().BoolVar(&contextJSON, "json", false, "Output as JSON (legacy, prefer --output json)")
 
 	// add-note command
 	var noteBody string
 	var noteBodyFile string
 	var noteTags string
+	var noteDryRun bool
 	addNoteCmd := &cobra.Command{
 		Use:   "add-note <parentItemKey>",
 		Short: "Add a note to an item",
 		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "parentItemKey: 8-character alphanumeric item key of parent item (required)",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
-			if err != nil {
+			if err := validateItemKey(args[0]); err != nil {
 				return err
 			}
 
@@ -394,19 +524,26 @@ func main() {
 			if noteBodyFile == "-" {
 				data, err := io.ReadAll(os.Stdin)
 				if err != nil {
-					return fmt.Errorf("failed to read stdin: %w", err)
+					return &CLIError{Code: ErrCodeIOError, Message: fmt.Sprintf("failed to read stdin: %v", err)}
 				}
 				content = string(data)
 			} else if noteBodyFile != "" {
+				if err := sanitizeInput(noteBodyFile); err != nil {
+					return err
+				}
 				data, err := os.ReadFile(noteBodyFile)
 				if err != nil {
-					return fmt.Errorf("failed to read file: %w", err)
+					return &CLIError{Code: ErrCodeIOError, Message: fmt.Sprintf("failed to read file: %v", err)}
 				}
 				content = string(data)
 			}
 
 			if content == "" {
-				return fmt.Errorf("specify note content with --body or --body-file")
+				return &CLIError{
+					Code:       ErrCodeInvalidArgument,
+					Message:    "note content is empty",
+					Suggestion: "Specify note content with --body or --body-file",
+				}
 			}
 
 			tags := []string{"ai-generated"}
@@ -419,9 +556,36 @@ func main() {
 				}
 			}
 
+			if noteDryRun {
+				payload := map[string]any{
+					"parentItem": args[0],
+					"content":    content,
+					"tags":       tags,
+				}
+				if isJSON() {
+					return printJSON(map[string]any{
+						"dryRun":  true,
+						"payload": payload,
+					})
+				}
+				fmt.Println("=== DRY RUN (no API call will be made) ===")
+				fmt.Printf("Parent Item: %s\n", args[0])
+				fmt.Printf("Tags:        %s\n", strings.Join(tags, ", "))
+				fmt.Printf("Content:\n%s\n", content)
+				return nil
+			}
+
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+
 			key, err := client.CreateNote(args[0], content, tags)
 			if err != nil {
 				return err
+			}
+			if isJSON() {
+				return printJSON(map[string]string{"noteKey": key})
 			}
 			fmt.Printf("Note created: %s\n", key)
 			return nil
@@ -430,6 +594,7 @@ func main() {
 	addNoteCmd.Flags().StringVar(&noteBody, "body", "", "Note content")
 	addNoteCmd.Flags().StringVar(&noteBodyFile, "body-file", "", "Read note content from file (- for stdin)")
 	addNoteCmd.Flags().StringVar(&noteTags, "tags", "", "Comma-separated tags (ai-generated is always added)")
+	addNoteCmd.Flags().BoolVar(&noteDryRun, "dry-run", false, "Show payload without making API call")
 
 	// export command
 	var exportCollection string
@@ -440,9 +605,16 @@ func main() {
 	exportCmd := &cobra.Command{
 		Use:   "export",
 		Short: "Batch export for literature review",
+		Annotations: map[string]string{
+			"args": "none",
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if exportCollection == "" && exportTag == "" && exportKeys == "" {
-				return fmt.Errorf("specify --collection, --tag, or --keys")
+				return &CLIError{
+					Code:       ErrCodeInvalidArgument,
+					Message:    "no filter specified",
+					Suggestion: "Specify --collection, --tag, or --keys",
+				}
 			}
 
 			client, err := newClient()
@@ -464,12 +636,13 @@ func main() {
 				return err
 			}
 
-			if len(items) == 0 {
-				fmt.Println("No items found")
-				return nil
-			}
-
-			if exportFormat == "json" {
+			if isJSON() || exportFormat == "json" {
+				if items == nil {
+					items = []zotero.Item{}
+				}
+				if isJSON() && exportFormat != "json" && exportFormat != "full" {
+					return printJSON(items)
+				}
 				type exportItem struct {
 					Item     zotero.Item              `json:"item"`
 					FullText *zotero.FullTextResponse `json:"fullText,omitempty"`
@@ -477,18 +650,27 @@ func main() {
 				var results []exportItem
 				for i, item := range items {
 					ei := exportItem{Item: item}
-					if exportFormat == "json" || exportFormat == "full" {
-						fmt.Fprintf(os.Stderr, "Fetching %d/%d...\n", i+1, len(items))
-						ft, _ := client.GetFullText(item.Key)
-						ei.FullText = ft
-					}
+					fmt.Fprintf(os.Stderr, "Fetching %d/%d...\n", i+1, len(items))
+					ft, _ := client.GetFullText(item.Key)
+					ei.FullText = ft
 					results = append(results, ei)
+				}
+				if results == nil {
+					results = []exportItem{}
+				}
+				if isJSON() {
+					return printJSON(results)
 				}
 				data, err := json.MarshalIndent(results, "", "  ")
 				if err != nil {
 					return err
 				}
 				fmt.Println(string(data))
+				return nil
+			}
+
+			if len(items) == 0 {
+				fmt.Println("No items found")
 				return nil
 			}
 
@@ -521,10 +703,159 @@ func main() {
 	exportCmd.Flags().StringVar(&exportFormat, "format", "summary", "Output format: summary, full, json")
 	exportCmd.Flags().IntVar(&exportLimit, "limit", 100, "Max items")
 
+	// upload command
+	var uploadParent string
+	var uploadTags string
+	var uploadDryRun bool
+	var uploadTitle string
+	uploadCmd := &cobra.Command{
+		Use:   "upload <filePath>",
+		Short: "Upload a file as an attachment",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "filePath: path to the file to upload (required)",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+			if err := validateFilePath(filePath); err != nil {
+				return err
+			}
+
+			fileData, err := os.ReadFile(filePath)
+			if err != nil {
+				return &CLIError{Code: ErrCodeIOError, Message: fmt.Sprintf("failed to read file: %v", err)}
+			}
+
+			fileInfo, err := os.Stat(filePath)
+			if err != nil {
+				return &CLIError{Code: ErrCodeIOError, Message: fmt.Sprintf("failed to stat file: %v", err)}
+			}
+
+			filename := filepath.Base(filePath)
+			filesize := fileInfo.Size()
+			mtime := fileInfo.ModTime().UnixMilli()
+
+			hash := md5.Sum(fileData)
+			md5hex := hex.EncodeToString(hash[:])
+
+			contentType := mime.TypeByExtension(filepath.Ext(filePath))
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+
+			tags := []string{}
+			if uploadTags != "" {
+				for _, t := range strings.Split(uploadTags, ",") {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						tags = append(tags, t)
+					}
+				}
+			}
+
+			title := uploadTitle
+			if title == "" {
+				title = filename
+			}
+
+			if uploadDryRun {
+				payload := map[string]any{
+					"filename":    filename,
+					"title":       title,
+					"filesize":    filesize,
+					"md5":         md5hex,
+					"mtime":      mtime,
+					"contentType": contentType,
+					"parentItem":  uploadParent,
+					"tags":        tags,
+				}
+				if isJSON() {
+					return printJSON(map[string]any{
+						"dryRun":  true,
+						"payload": payload,
+					})
+				}
+				fmt.Println("=== DRY RUN (no API call will be made) ===")
+				fmt.Printf("File:         %s\n", filePath)
+				fmt.Printf("Filename:     %s\n", filename)
+				fmt.Printf("Title:        %s\n", title)
+				fmt.Printf("Size:         %d bytes\n", filesize)
+				fmt.Printf("MD5:          %s\n", md5hex)
+				fmt.Printf("Content-Type: %s\n", contentType)
+				if uploadParent != "" {
+					fmt.Printf("Parent Item:  %s\n", uploadParent)
+				}
+				if len(tags) > 0 {
+					fmt.Printf("Tags:         %s\n", strings.Join(tags, ", "))
+				}
+				return nil
+			}
+
+			if uploadParent != "" {
+				if err := validateItemKey(uploadParent); err != nil {
+					return err
+				}
+			}
+
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "Creating attachment item...\n")
+			attachKey, err := client.CreateAttachment(uploadParent, filename, title, contentType, tags)
+			if err != nil {
+				return fmt.Errorf("failed to create attachment: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Attachment created: %s\n", attachKey)
+
+			fmt.Fprintf(os.Stderr, "Requesting upload authorization...\n")
+			auth, err := client.GetUploadAuthorization(attachKey, filename, filesize, md5hex, mtime)
+			if err != nil {
+				return fmt.Errorf("failed to get upload authorization: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "Uploading file content (%d bytes)...\n", filesize)
+			if err := client.UploadFileContent(auth, fileData); err != nil {
+				return fmt.Errorf("failed to upload file: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "Registering upload...\n")
+			if err := client.RegisterUpload(attachKey, auth.UploadKey); err != nil {
+				return fmt.Errorf("failed to register upload: %w", err)
+			}
+
+			if isJSON() {
+				return printJSON(map[string]string{
+					"attachmentKey": attachKey,
+					"filename":      filename,
+				})
+			}
+			fmt.Printf("Upload complete: %s (key: %s)\n", filename, attachKey)
+			return nil
+		},
+	}
+	uploadCmd.Flags().StringVar(&uploadParent, "parent", "", "Parent item key (standalone attachment if omitted)")
+	uploadCmd.Flags().StringVar(&uploadTags, "tags", "", "Comma-separated tags")
+	uploadCmd.Flags().BoolVar(&uploadDryRun, "dry-run", false, "Show payload without making API call")
+	uploadCmd.Flags().StringVar(&uploadTitle, "title", "", "Attachment title (defaults to filename)")
+
+	// schema command
+	schemaCmd := newSchemaCmd(rootCmd)
+
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
-		fulltextCmd, fullsearchCmd, contextCmd, addNoteCmd, exportCmd)
+		fulltextCmd, fullsearchCmd, contextCmd, addNoteCmd, exportCmd, uploadCmd, schemaCmd)
 
 	if err := rootCmd.Execute(); err != nil {
+		cliErr := classifyError(err)
+		if isJSON() {
+			printErrorJSON(cliErr.Code, cliErr.Message, cliErr.Suggestion)
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", cliErr.Message)
+			if cliErr.Suggestion != "" {
+				fmt.Fprintf(os.Stderr, "Suggestion: %s\n", cliErr.Suggestion)
+			}
+		}
 		os.Exit(1)
 	}
 }
