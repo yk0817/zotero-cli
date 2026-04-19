@@ -11,18 +11,55 @@ user-invocable: true
 
 `$ARGUMENTS` を以下のルールでパースせよ：
 
-- 最初のトークン → `<itemKey>`（必須）
+- 最初のトークン（または `--save` / `--format` 以外の連続トークン）→ `<query>`（必須）
 - `--save` → 要約後にZoteroへノート保存
 - `--format <name>` → 要約フォーマット指定（省略時は `ochiai`）
   - `ochiai` — 落合陽一式6項目要約（デフォルト）
   - `brief` — 簡潔要約
   - `abstract` — 構造化アブストラクト
   - `custom "..."` — `--format custom` の次のクォート文字列をカスタムプロンプトとして使用
-- `<itemKey>` が見つからない場合はエラーメッセージを出して終了
+- `<query>` が見つからない場合はエラーメッセージを出して終了
+
+### queryの判定
+
+`<query>` がitemKey形式（英数字ちょうど8文字、例: `FQVL7ZHM`）かどうかを判定する：
+
+- **itemKey形式に一致** → そのまま `<itemKey>` として使用（従来動作）
+- **一致しない** → タイトル/キーワード検索として扱う（次のStep 1aで検索）
 
 ## 手順
 
-### Step 1: 論文情報の取得
+### Step 1a: itemKeyの解決
+
+**queryがitemKey形式の場合：**
+
+そのまま `<itemKey>` として Step 1b へ進む。
+
+**queryがキーワードの場合：**
+
+Bashツールで以下を実行：
+
+```
+cd ~/zotero-cli && ./zotero-cli search <query>
+```
+
+検索結果に応じて分岐：
+
+- **0件** → 「検索結果が見つかりませんでした: `<query>`」と表示して終了
+- **1件** → その itemKey を自動的に採用し、Step 1b へ進む
+- **複数件** → 候補一覧を番号付きで表示し、AskUserQuestion ツールでユーザーに番号を選択してもらう。選択された itemKey で Step 1b へ進む
+
+候補一覧の表示形式：
+
+```
+検索結果: <N>件見つかりました。番号を入力して選択してください。
+
+  1. [FQVL7ZHM] Investigating Environmental, Social, and Governance... (Angioni et al.)
+  2. [99NU4NKK] An automated information extraction system... (Mohsin et al., 2024)
+  ...
+```
+
+### Step 1b: 論文情報の取得
 
 Bashツールで以下を実行：
 
