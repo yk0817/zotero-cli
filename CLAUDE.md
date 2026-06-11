@@ -5,7 +5,8 @@ Zotero Web API CLI client. Go + Cobra.
 ## Build & Test
 
 ```bash
-go build ./cmd/zotero-cli/
+go build ./...
+go test -race ./...
 ```
 
 ## AI Agent Usage
@@ -18,6 +19,7 @@ All commands support `--output json` for structured responses:
 zotero-cli search "attention" --output json
 zotero-cli get ABCD1234 --output json
 zotero-cli collections --output json
+zotero-cli annotations ABCD1234 --output json
 ```
 
 JSON responses use a standard envelope:
@@ -57,8 +59,13 @@ Shows the payload without making an API call.
 | `NOT_FOUND` | Requested resource not found |
 | `IO_ERROR` | File read/stdin error |
 
+### Annotations
+
+PDF annotations (highlights/comments) live under each attachment's children and are only visible via the Web API after Zotero sync. `zotero-cli annotations <key>` returns them in reading order (`annotationSortIndex`); when the result is empty the CLI prints a sync hint to stderr — do not interpret an empty result as "no marks exist".
+
 ## Project Structure
 
 - `cmd/zotero-cli/` — CLI entry point (Cobra commands)
+- `cmd/zotero-mcp/` — Read-only MCP server (stdio, official Go SDK)
 - `zotero/` — API client library (types, HTTP client)
 - `.claude/commands/` — Claude Code slash commands for paper analysis

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -255,6 +256,64 @@ func (c *Client) GetChildren(itemKey string) ([]Item, error) {
 	return items, nil
 }
 
+// GetAnnotations returns all annotations under an item's attachments,
+// sorted by annotationSortIndex (reading order).
+func (c *Client) GetAnnotations(itemKey string) ([]Item, error) {
+	children, err := c.GetChildren(itemKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get children of %s: %w", itemKey, err)
+	}
+	return c.annotationsUnder(children)
+}
+
+// annotationsUnder collects annotation items beneath the given children
+// (descending into each attachment), sorted by annotationSortIndex.
+func (c *Client) annotationsUnder(children []Item) ([]Item, error) {
+	var annotations []Item
+	for _, child := range children {
+		switch child.Data.ItemType {
+		case "annotation":
+			// the parent was an attachment key; its children are annotations directly
+			annotations = append(annotations, child)
+		case "attachment":
+			grandchildren, err := c.GetChildren(child.Key)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get annotations of attachment %s: %w", child.Key, err)
+			}
+			for _, gc := range grandchildren {
+				if gc.Data.ItemType == "annotation" {
+					annotations = append(annotations, gc)
+				}
+			}
+		}
+	}
+
+	// annotationSortIndex is zero-padded, so lexicographic order == reading order
+	sort.Slice(annotations, func(i, j int) bool {
+		return annotations[i].Data.AnnotationSortIndex < annotations[j].Data.AnnotationSortIndex
+	})
+	return annotations, nil
+}
+
+// FilterAnnotations returns annotations matching the given color and type
+// (an empty filter matches all).
+func FilterAnnotations(anns []Item, color, annType string) []Item {
+	if color == "" && annType == "" {
+		return anns
+	}
+	filtered := []Item{}
+	for _, a := range anns {
+		if color != "" && !strings.EqualFold(a.Data.AnnotationColor, color) {
+			continue
+		}
+		if annType != "" && a.Data.AnnotationType != annType {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	return filtered
+}
+
 // CreateNote creates a note attached to a parent item.
 func (c *Client) CreateNote(parentKey, content string, tags []string) (string, error) {
 	if !strings.HasPrefix(strings.TrimSpace(content), "<") {
@@ -349,7 +408,10 @@ func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
 
 	ft, _ := c.GetFullText(itemKey)
 
-	children, _ := c.GetChildren(itemKey)
+	children, err := c.GetChildren(itemKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get children of %s: %w", itemKey, err)
+	}
 	var notes, attachments []Item
 	for _, child := range children {
 		switch child.Data.ItemType {
@@ -360,11 +422,17 @@ func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
 		}
 	}
 
+	annotations, err := c.annotationsUnder(children)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ContextBundle{
 		Item:        item,
 		FullText:    ft,
 		Notes:       notes,
 		Attachments: attachments,
+		Annotations: annotations,
 	}, nil
 }
 
@@ -540,6 +608,38 @@ func FormatTags(tags []Tag) string {
 		return "-"
 	}
 	return strings.Join(t, ", ")
+}
+
+// FormatAnnotation renders one annotation as human/LLM-readable text.
+func FormatAnnotation(it Item) string {
+	d := it.Data
+	page := ""
+	if d.AnnotationPageLabel != "" {
+		page = " p." + d.AnnotationPageLabel
+	}
+
+	switch d.AnnotationType {
+	case "highlight", "underline":
+		color := ""
+		if d.AnnotationColor != "" {
+			color = " " + d.AnnotationColor
+		}
+		s := fmt.Sprintf("[%s%s%s] \"%s\"", d.AnnotationType, page, color, d.AnnotationText)
+		if d.AnnotationComment != "" {
+			s += "\n  ↳ comment: " + d.AnnotationComment
+		}
+		return s
+	case "note":
+		return fmt.Sprintf("[note%s] %s", page, d.AnnotationComment)
+	case "ink", "image":
+		s := fmt.Sprintf("[%s%s — no text]", d.AnnotationType, page)
+		if d.AnnotationComment != "" {
+			s += "\n  ↳ comment: " + d.AnnotationComment
+		}
+		return s
+	default:
+		return fmt.Sprintf("[%s%s] %s %s", d.AnnotationType, page, d.AnnotationText, d.AnnotationComment)
+	}
 }
 
 // Truncate truncates a string to a maximum number of runes.

@@ -1,3 +1,4 @@
 /zotero-cli
 *.exe
 .DS_Store
+/zotero-mcp

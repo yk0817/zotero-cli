@@ -69,11 +69,41 @@ zotero-cli get FQVL7ZHM
 zotero-cli fulltext FQVL7ZHM
 zotero-cli fulltext FQVL7ZHM --max-chars 5000
 
-# Show all info (metadata, full text, notes, attachments)
+# Show all info (metadata, full text, annotations, notes, attachments)
 zotero-cli context FQVL7ZHM
 zotero-cli context FQVL7ZHM --with-notes
+zotero-cli context FQVL7ZHM --with-annotations
 zotero-cli context FQVL7ZHM --json
 ```
+
+### Annotations
+
+Retrieve PDF annotations (highlights, underlines, comments) in reading order. Annotations are fetched from the children of each attachment, so they are only available after Zotero sync.
+
+```bash
+# All annotations of an item
+zotero-cli annotations FQVL7ZHM
+
+# Filter by color (useful for color-coded reading)
+zotero-cli annotations FQVL7ZHM --color "#ff0000"
+
+# Filter by type: highlight, underline, note, ink, image
+zotero-cli annotations FQVL7ZHM --type highlight
+
+# Structured output
+zotero-cli annotations FQVL7ZHM --output json
+```
+
+Text output format:
+
+```
+[highlight p.9 #aaaaaa] "selected passage from the PDF"
+  ↳ comment: your comment on the highlight
+[note p.12] a note placed on the page
+[ink p.15 — no text]
+```
+
+`ink` / `image` annotations (e.g., handwritten notes from GoodNotes) carry no text; only their page position is shown.
 
 ### Export
 
@@ -144,16 +174,64 @@ func main() {
 		fmt.Printf("%s: %s\n", item.Key, item.Data.Title)
 	}
 
-	// Get full context (metadata + fulltext + notes + attachments)
+	// Get full context (metadata + fulltext + annotations + notes + attachments)
 	ctx, _ := client.GetContext("FQVL7ZHM")
 	fmt.Println(ctx.Item.Data.Title)
 	fmt.Println(ctx.FullText.Content)
+
+	// Get annotations in reading order
+	anns, _ := client.GetAnnotations("FQVL7ZHM")
+	for _, a := range anns {
+		fmt.Println(zotero.FormatAnnotation(a))
+	}
 
 	// Create a note
 	key, _ := client.CreateNote("FQVL7ZHM", "My notes here", []string{"review"})
 	fmt.Println("Created note:", key)
 }
 ```
+
+## MCP Server
+
+`cmd/zotero-mcp` is a read-only [MCP](https://modelcontextprotocol.io/) server that exposes the same `zotero` package over stdio. It reuses the CLI config (`~/.config/zotero-cli/config.json`), so run `zotero-cli config` first.
+
+### Build
+
+```bash
+go build -o zotero-mcp ./cmd/zotero-mcp/
+```
+
+### Setup (Claude Code)
+
+```bash
+claude mcp add zotero -- ~/zotero-cli/zotero-mcp
+```
+
+Or add to `.mcp.json` / `~/.claude/settings.json` manually:
+
+```json
+{
+  "mcpServers": {
+    "zotero": {
+      "command": "/Users/you/zotero-cli/zotero-mcp"
+    }
+  }
+}
+```
+
+### Setup (Cursor and other MCP clients)
+
+Add the same `command` entry to the client's MCP config (e.g., `~/.cursor/mcp.json`).
+
+### Tools
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `zotero_search` | `query`, `tag?` | Search library items; returns keys, titles, authors, dates |
+| `zotero_get_annotations` | `item_key`, `color?`, `type?` | PDF annotations in reading order, optionally filtered |
+| `zotero_get_context` | `item_key` | Metadata + abstract + full text + annotations + notes + attachments |
+
+All tools are read-only (GET requests only). If an item has no synced annotations, the tools return a hint about Zotero sync instead of an empty response.
 
 ## Claude Code Integration
 
@@ -212,11 +290,22 @@ Auto-generate a related work section draft with `\cite{}` references.
 /related-work --keys "FQVL7ZHM,99NU4NKK" --lang en --save               # English → save
 ```
 
+### `/discuss` (`/discuss-en`) — Close-Reading Discussion
+
+Discuss a paper interactively around your own Zotero highlights and comments (fetched via the `annotations` command). Distinct from `/summarize`: it quotes each of your marked passages, explains why it matters, responds to your comments, and connects them to the full text.
+
+```bash
+/discuss FQVL7ZHM                        # Discuss around all annotations
+/discuss "attention is all you need"     # Search → select → discuss
+/discuss FQVL7ZHM --color "#ff0000"      # Focus on red highlights only
+```
+
 ### Common Options
 
 | Option | Description | Available in |
 |--------|-------------|--------------|
-| `--save` | Save output as a Zotero note | All skills |
+| `--save` | Save output as a Zotero note | All skills except `/discuss` |
+| `--color <hex>` | Focus on annotations of a specific color | `/discuss` |
 | `--focus <aspect>` | Focus comparison on a specific aspect | `/compare` |
 | `--perspective <text>` | Focus analysis on a specific viewpoint | `/critique` |
 | `--columns "<cols>"` | Custom table columns | `/survey-table` |
@@ -240,6 +329,8 @@ zotero-cli/
 │   ├── output.go        # JSON output helpers and error types
 │   ├── schema.go        # Schema command for agent discovery
 │   └── validate.go      # Input validation
+├── cmd/zotero-mcp/
+│   └── main.go          # Read-only MCP server (stdio)
 ├── .claude/commands/
 │   ├── summarize.md     # Paper summarization (Japanese)
 │   ├── critique.md      # Critical analysis (Japanese)
@@ -249,7 +340,9 @@ zotero-cli/
 │   ├── survey-table.md  # Survey table generation (Japanese)
 │   ├── survey-table-en.md # Survey table generation (English)
 │   ├── related-work.md  # Related work section (Japanese)
-│   └── related-work-en.md # Related work section (English)
+│   ├── related-work-en.md # Related work section (English)
+│   ├── discuss.md       # Close-reading discussion (Japanese)
+│   └── discuss-en.md    # Close-reading discussion (English)
 └── go.mod
 ```
 
