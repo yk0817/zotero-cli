@@ -46,6 +46,9 @@ func annotationJSON(key, annType, text, comment, sortIndex string) string {
 		key, annType, text, comment, sortIndex)
 }
 
+// Contract: GetAnnotations walks item → attachments → annotations and
+// returns them in reading order (annotationSortIndex), regardless of the
+// order the API returns them in.
 func TestGetAnnotations(t *testing.T) {
 	// Arrange: top-level item ITEM0001 with two attachments; annotations out of reading order
 	responses := map[string]string{
@@ -82,6 +85,8 @@ func TestGetAnnotations(t *testing.T) {
 	}
 }
 
+// Contract: an item with no attachments yields an empty list, not an error —
+// "no annotations" is a normal state (see the sync-hint messaging), not a failure.
 func TestGetAnnotationsEmptyWhenNoAttachments(t *testing.T) {
 	responses := map[string]string{
 		"/users/12345/items/ITEM0001/children": `[]`,
@@ -98,6 +103,8 @@ func TestGetAnnotationsEmptyWhenNoAttachments(t *testing.T) {
 	}
 }
 
+// Contract: passing an attachment key (instead of the parent item key) also
+// works — its children are annotations directly, with no extra descent.
 func TestGetAnnotationsDirectAttachmentKey(t *testing.T) {
 	// Passing an attachment key directly: its children are annotations
 	responses := map[string]string{
@@ -117,6 +124,10 @@ func TestGetAnnotationsDirectAttachmentKey(t *testing.T) {
 	}
 }
 
+// Contract: FormatAnnotation renders one line per annotation in a stable
+// "[type p.N color]" shape that LLMs and humans parse; each annotation type
+// has its own layout (highlights quote text, notes show the comment, ink/image
+// say "no text" explicitly so absence is not mistaken for an empty highlight).
 func TestFormatAnnotation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -180,6 +191,9 @@ func TestFormatAnnotation(t *testing.T) {
 	}
 }
 
+// Contract: filters narrow the annotation list; both color and type match
+// case-insensitively because the values come from LLM/CLI input where casing
+// is unreliable ("#FFD400" vs "#ffd400", "Highlight" vs "highlight").
 func TestFilterAnnotations(t *testing.T) {
 	anns := []Item{
 		{Key: "A1", Data: ItemData{AnnotationType: "highlight", AnnotationColor: "#FF0000"}},
@@ -196,6 +210,7 @@ func TestFilterAnnotations(t *testing.T) {
 		{name: "no filter returns all", wantKeys: []string{"A1", "A2", "A3"}},
 		{name: "color filter is case-insensitive", color: "#ff0000", wantKeys: []string{"A1"}},
 		{name: "type filter", annType: "highlight", wantKeys: []string{"A1", "A3"}},
+		{name: "type filter is case-insensitive", annType: "Highlight", wantKeys: []string{"A1", "A3"}},
 		{name: "combined filter", color: "#aaaaaa", annType: "highlight", wantKeys: []string{"A3"}},
 		{name: "no match returns empty", color: "#00ff00", wantKeys: []string{}},
 	}
@@ -215,6 +230,8 @@ func TestFilterAnnotations(t *testing.T) {
 	}
 }
 
+// Contract: with withAnnotations=true, GetContext descends into attachments
+// and bundles their annotations alongside metadata/fulltext/children.
 func TestGetContextIncludesAnnotations(t *testing.T) {
 	responses := map[string]string{
 		"/users/12345/items/ITEM0001":          `{"key":"ITEM0001","data":{"itemType":"journalArticle","title":"Test Paper"}}`,
@@ -228,12 +245,38 @@ func TestGetContextIncludesAnnotations(t *testing.T) {
 	}
 	client := newStubClient(responses)
 
-	bundle, err := client.GetContext("ITEM0001")
+	bundle, err := client.GetContext("ITEM0001", true)
 
 	if err != nil {
 		t.Fatalf("GetContext returned error: %v", err)
 	}
 	if len(bundle.Annotations) != 1 || bundle.Annotations[0].Key != "ANN00001" {
 		t.Errorf("expected annotations [ANN00001], got %v", bundle.Annotations)
+	}
+}
+
+// Contract: with withAnnotations=false, GetContext must NOT issue the
+// per-attachment children requests — they cost one API call each and count
+// against Zotero's rate limit. The stub has no response for the attachment's
+// children, so any such request would fail the test.
+func TestGetContextSkipsAnnotationFetchWhenNotRequested(t *testing.T) {
+	responses := map[string]string{
+		"/users/12345/items/ITEM0001": `{"key":"ITEM0001","data":{"itemType":"journalArticle","title":"Test Paper"}}`,
+		"/users/12345/items/ITEM0001/children": `[
+			{"key":"ATTACH01","data":{"itemType":"attachment","filename":"a.pdf"}}
+		]`,
+	}
+	client := newStubClient(responses)
+
+	bundle, err := client.GetContext("ITEM0001", false)
+
+	if err != nil {
+		t.Fatalf("GetContext returned error: %v", err)
+	}
+	if len(bundle.Annotations) != 0 {
+		t.Errorf("expected no annotations fetched, got %v", bundle.Annotations)
+	}
+	if len(bundle.Attachments) != 1 {
+		t.Errorf("expected attachment list still populated, got %v", bundle.Attachments)
 	}
 }

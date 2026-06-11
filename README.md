@@ -331,7 +331,7 @@ zotero-cli/
 │   ├── schema.go        # Schema command for agent discovery
 │   └── validate.go      # Input validation
 ├── cmd/zotero-mcp/
-│   └── main.go          # Read-only MCP server (stdio)
+│   └── main.go          # MCP server (stdio): read tools + zotero_add_note
 ├── .claude/commands/
 │   ├── summarize.md     # Paper summarization (Japanese)
 │   ├── critique.md      # Critical analysis (Japanese)

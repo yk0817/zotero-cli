@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -78,6 +80,9 @@ func newPathStubClient(responses map[string]string) *zotero.Client {
 	return c
 }
 
+// Contract: search results are one "[KEY] Title (Authors, Date)" line per
+// item so the LLM can pick up the key for follow-up calls; attachments and
+// notes are excluded because they are not papers.
 func TestSearchHandlerFormatsResults(t *testing.T) {
 	client := newPathStubClient(map[string]string{
 		"/users/12345/items": `[
@@ -101,22 +106,47 @@ func TestSearchHandlerFormatsResults(t *testing.T) {
 	}
 }
 
+// Contract: an empty result must say "No results found" explicitly — a blank
+// tool result gives the calling LLM no way to tell "no matches" from a
+// malfunction. This must hold both when the API returns nothing and when it
+// returns only attachments/notes that all get filtered out.
 func TestSearchHandlerNoResults(t *testing.T) {
-	client := newPathStubClient(map[string]string{
-		"/users/12345/items": `[]`,
-	})
-	handler := searchHandler(client)
-
-	res, _, err := handler(context.Background(), nil, searchInput{Query: "nothing"})
-
-	if err != nil {
-		t.Fatalf("handler returned error: %v", err)
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{name: "api returns empty list", response: `[]`},
+		{
+			name: "all hits filtered out as attachments and notes",
+			response: `[
+				{"key":"ATTACH01","data":{"itemType":"attachment","filename":"paper.pdf"}},
+				{"key":"NOTE0001","data":{"itemType":"note","note":"a note"}}
+			]`,
+		},
 	}
-	if textOf(t, res) != "No results found" {
-		t.Errorf("expected no-results message, got %q", textOf(t, res))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newPathStubClient(map[string]string{
+				"/users/12345/items": tt.response,
+			})
+			handler := searchHandler(client)
+
+			res, _, err := handler(context.Background(), nil, searchInput{Query: "nothing"})
+
+			if err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			if textOf(t, res) != "No results found" {
+				t.Errorf("expected no-results message, got %q", textOf(t, res))
+			}
+		})
 	}
 }
 
+// Contract: zero annotations triggers the sync hint instead of a bare empty
+// result — the most common cause is an unsynced Zotero client, and the LLM
+// must not conclude "no marks exist" (see MEMORY.md: this misread happened).
 func TestAnnotationsHandlerReturnsSyncHintWhenEmpty(t *testing.T) {
 	client := newPathStubClient(map[string]string{
 		"/users/12345/items/ITEM0001/children": `[]`,
@@ -133,6 +163,10 @@ func TestAnnotationsHandlerReturnsSyncHintWhenEmpty(t *testing.T) {
 	}
 }
 
+// Contract: zotero_get_context renders every section the bundle contains —
+// metadata, abstract, full text, annotations, existing notes, attachments —
+// because the tool's purpose is to give the LLM the complete picture of one
+// item in a single call.
 func TestContextHandlerRendersAllSections(t *testing.T) {
 	client := newPathStubClient(map[string]string{
 		"/users/12345/items/ITEM0001":          `{"key":"ITEM0001","data":{"itemType":"journalArticle","title":"Test Paper","creators":[{"lastName":"Doe","firstName":"Jane"}],"date":"2024","DOI":"10.1234/x","publicationTitle":"Journal of Tests","abstractNote":"An abstract."}}`,
@@ -163,6 +197,8 @@ func TestContextHandlerRendersAllSections(t *testing.T) {
 	}
 }
 
+// Contract: a missing item is an error, not an empty context — returning a
+// blank bundle would let the LLM "summarize" a paper that does not exist.
 func TestContextHandlerItemNotFound(t *testing.T) {
 	client := newPathStubClient(map[string]string{})
 	handler := contextHandler(client)
@@ -174,6 +210,11 @@ func TestContextHandlerItemNotFound(t *testing.T) {
 	}
 }
 
+// Contract: zotero_add_note creates the note via POST, reports the created
+// key back to the caller, and normalizes tags — the ai-generated marker comes
+// first exactly once even when the caller also passes it, and blank tags are
+// dropped. Tags are asserted on the decoded payload (not raw-string matching)
+// so a regression cannot hide behind the note body containing the same word.
 func TestAddNoteHandlerCreatesNote(t *testing.T) {
 	client, rt := newStubClient(`{"successful":{"0":{"key":"NOTE5678"}},"failed":{}}`)
 	handler := addNoteHandler(client)
@@ -194,29 +235,66 @@ func TestAddNoteHandlerCreatesNote(t *testing.T) {
 	if rt.lastMethod != http.MethodPost {
 		t.Errorf("expected POST request, got %s", rt.lastMethod)
 	}
-	body := string(rt.lastBody)
-	if strings.Count(body, "ai-generated") != 1 {
-		t.Errorf("expected ai-generated tag exactly once, got body %s", body)
-	}
-	if !strings.Contains(body, "summary") {
-		t.Errorf("expected extra tag in body, got %s", body)
-	}
-}
 
-func TestAddNoteHandlerRejectsInvalidKey(t *testing.T) {
-	client, rt := newStubClient(`{}`)
-	handler := addNoteHandler(client)
-
-	_, _, err := handler(context.Background(), nil, addNoteInput{ItemKey: "bad", Body: "x"})
-
-	if err == nil {
-		t.Fatal("expected error for invalid item key, got nil")
+	var payload []struct {
+		Tags []struct {
+			Tag string `json:"tag"`
+		} `json:"tags"`
 	}
-	if rt.lastMethod != "" {
-		t.Errorf("expected no API call for invalid key, got %s", rt.lastMethod)
+	if err := json.Unmarshal(rt.lastBody, &payload); err != nil || len(payload) != 1 {
+		t.Fatalf("request body is not a 1-item JSON array: %v (%s)", err, rt.lastBody)
+	}
+	var got []string
+	for _, tag := range payload[0].Tags {
+		got = append(got, tag.Tag)
+	}
+	want := []string{"ai-generated", "summary"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("expected tags %v, got %v", want, got)
 	}
 }
 
+// Contract: every handler that takes an item key validates it BEFORE any
+// API call. item_key comes from an LLM and is interpolated into the request
+// path, so an unvalidated value like "ABCD1234/children" would silently
+// rewrite the endpoint instead of failing cleanly.
+func TestHandlersRejectInvalidItemKeyWithoutAPICall(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*zotero.Client) error
+	}{
+		{name: "add_note", call: func(c *zotero.Client) error {
+			_, _, err := addNoteHandler(c)(context.Background(), nil, addNoteInput{ItemKey: "bad", Body: "x"})
+			return err
+		}},
+		{name: "get_annotations", call: func(c *zotero.Client) error {
+			_, _, err := annotationsHandler(c)(context.Background(), nil, annotationsInput{ItemKey: "ABCD1234/children"})
+			return err
+		}},
+		{name: "get_context", call: func(c *zotero.Client) error {
+			_, _, err := contextHandler(c)(context.Background(), nil, itemKeyInput{ItemKey: ""})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, rt := newStubClient(`{}`)
+
+			err := tt.call(client)
+
+			if err == nil {
+				t.Fatal("expected error for invalid item key, got nil")
+			}
+			if rt.lastMethod != "" {
+				t.Errorf("expected no API call for invalid key, got %s", rt.lastMethod)
+			}
+		})
+	}
+}
+
+// Contract: an empty body is rejected locally — creating a blank note in the
+// user's library would be silent data pollution.
 func TestAddNoteHandlerRejectsEmptyBody(t *testing.T) {
 	client, rt := newStubClient(`{}`)
 	handler := addNoteHandler(client)

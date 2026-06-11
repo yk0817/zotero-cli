@@ -1,6 +1,7 @@
 package zotero
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -8,22 +9,31 @@ import (
 	"testing"
 )
 
-// queryRecordingTransport records the last GET request URL and returns a canned body.
+// queryRecordingTransport records every GET request URL and returns canned
+// bodies: entries from queue first (one per request), then response forever.
 type queryRecordingTransport struct {
+	urls     []*url.URL
 	lastURL  *url.URL
+	queue    []string
 	response string
 	status   int
 }
 
 func (q *queryRecordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	q.lastURL = req.URL
+	q.urls = append(q.urls, req.URL)
+	body := q.response
+	if len(q.queue) > 0 {
+		body = q.queue[0]
+		q.queue = q.queue[1:]
+	}
 	status := q.status
 	if status == 0 {
 		status = http.StatusOK
 	}
 	return &http.Response{
 		StatusCode: status,
-		Body:       io.NopCloser(strings.NewReader(q.response)),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     http.Header{},
 	}, nil
 }
@@ -35,6 +45,8 @@ func newQueryClient(response string) (*Client, *queryRecordingTransport) {
 	return c, qt
 }
 
+// Contract: SearchItems forwards query and tag as q/tag params to /items
+// and parses the result — this fixes the request shape the Zotero API expects.
 func TestSearchItemsSendsQueryAndTag(t *testing.T) {
 	client, qt := newQueryClient(`[{"key":"ITEM0001","data":{"itemType":"journalArticle","title":"Attention"}}]`)
 
@@ -58,6 +70,8 @@ func TestSearchItemsSendsQueryAndTag(t *testing.T) {
 	}
 }
 
+// Contract: empty filters are omitted entirely — sending q= or tag= as empty
+// strings would change the API's matching behavior.
 func TestSearchItemsOmitsEmptyParams(t *testing.T) {
 	client, qt := newQueryClient(`[]`)
 
@@ -72,6 +86,8 @@ func TestSearchItemsOmitsEmptyParams(t *testing.T) {
 	}
 }
 
+// Contract: HTTP errors and malformed JSON surface as errors — a 500 or a
+// truncated body must never be reported as "no results".
 func TestSearchItemsAPIError(t *testing.T) {
 	client, qt := newQueryClient("internal error")
 	qt.status = http.StatusInternalServerError
@@ -93,6 +109,8 @@ func TestSearchItemsInvalidJSON(t *testing.T) {
 	}
 }
 
+// Contract: GetItem addresses /items/<key> and unmarshals the single-item
+// response (not a list).
 func TestGetItem(t *testing.T) {
 	client, qt := newQueryClient(`{"key":"ITEM0001","data":{"itemType":"journalArticle","title":"Test Paper"}}`)
 
@@ -109,6 +127,7 @@ func TestGetItem(t *testing.T) {
 	}
 }
 
+// Contract: ListCollections parses the collection list shape (key + data.name).
 func TestListCollections(t *testing.T) {
 	client, _ := newQueryClient(`[{"key":"COLL0001","data":{"name":"Papers"}}]`)
 
@@ -122,6 +141,8 @@ func TestListCollections(t *testing.T) {
 	}
 }
 
+// Contract: GetBibTeX requests the bibtex export format; the default page
+// size is 25 and --all raises it to 100 (asserted in the next test).
 func TestGetBibTeX(t *testing.T) {
 	client, qt := newQueryClient("@article{vaswani2017, title={Attention}}")
 
@@ -138,6 +159,7 @@ func TestGetBibTeX(t *testing.T) {
 	}
 }
 
+// Contract: a collection key reroutes the export to that collection's items.
 func TestGetBibTeXCollectionAndAll(t *testing.T) {
 	client, qt := newQueryClient("@article{x}")
 
@@ -154,6 +176,8 @@ func TestGetBibTeXCollectionAndAll(t *testing.T) {
 	}
 }
 
+// Contract: GetFullText reads the /fulltext endpoint and exposes the page
+// counts callers display alongside the content.
 func TestGetFullText(t *testing.T) {
 	client, qt := newQueryClient(`{"content":"body text","indexedPages":5,"totalPages":7}`)
 
@@ -170,6 +194,8 @@ func TestGetFullText(t *testing.T) {
 	}
 }
 
+// Contract: full-text search differs from plain search only by
+// qmode=everything — that param is what makes Zotero search inside PDFs.
 func TestFullTextSearchSetsQmodeEverything(t *testing.T) {
 	client, qt := newQueryClient(`[]`)
 
@@ -187,6 +213,7 @@ func TestFullTextSearchSetsQmodeEverything(t *testing.T) {
 	}
 }
 
+// Contract: a collection key scopes the listing to that collection's items.
 func TestListItems(t *testing.T) {
 	client, qt := newQueryClient(`[{"key":"ITEM0001"}]`)
 
@@ -203,6 +230,8 @@ func TestListItems(t *testing.T) {
 	}
 }
 
+// Contract: limit<=0 falls back to 100 instead of sending limit=0 (which the
+// API would read as "default 25").
 func TestListItemsByTagDefaultsLimit(t *testing.T) {
 	client, qt := newQueryClient(`[]`)
 
@@ -220,6 +249,56 @@ func TestListItemsByTagDefaultsLimit(t *testing.T) {
 	}
 }
 
+// Contract: GetChildren follows pagination instead of trusting one page.
+// The Zotero API caps a page at 100 items (and defaults to 25 without an
+// explicit limit) — a paper with more than one page of annotations must not
+// have the rest silently dropped.
+func TestGetChildrenPaginates(t *testing.T) {
+	fullPage := make([]string, 100)
+	for i := range fullPage {
+		fullPage[i] = fmt.Sprintf(`{"key":"CHILD%03d"}`, i)
+	}
+	secondPage := `[{"key":"CHILD100"},{"key":"CHILD101"}]`
+
+	client, qt := newQueryClient("")
+	qt.queue = []string{"[" + strings.Join(fullPage, ",") + "]", secondPage}
+
+	children, err := client.GetChildren("ITEM0001")
+
+	if err != nil {
+		t.Fatalf("GetChildren returned error: %v", err)
+	}
+	if len(children) != 102 {
+		t.Fatalf("expected 102 children across 2 pages, got %d", len(children))
+	}
+	if len(qt.urls) != 2 {
+		t.Fatalf("expected 2 paginated requests, got %d", len(qt.urls))
+	}
+	if got := qt.urls[1].Query().Get("start"); got != "100" {
+		t.Errorf("expected second request to resume at start=100, got %q", got)
+	}
+}
+
+// Contract: a result set smaller than one page needs exactly one request —
+// pagination must not add a useless second round trip.
+func TestGetChildrenSinglePage(t *testing.T) {
+	client, qt := newQueryClient(`[{"key":"CHILD001"}]`)
+
+	children, err := client.GetChildren("ITEM0001")
+
+	if err != nil {
+		t.Fatalf("GetChildren returned error: %v", err)
+	}
+	if len(children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(children))
+	}
+	if len(qt.urls) != 1 {
+		t.Errorf("expected exactly 1 request for a partial page, got %d", len(qt.urls))
+	}
+}
+
+// Contract: batch lookup joins keys with commas and sizes the limit to the
+// key count so every requested item fits in one response.
 func TestGetItemsByKeys(t *testing.T) {
 	client, qt := newQueryClient(`[{"key":"AAAA0001"},{"key":"BBBB0002"}]`)
 

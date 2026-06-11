@@ -104,14 +104,13 @@ func searchHandler(client *zotero.Client) mcp.ToolHandlerFor[searchInput, any] {
 		if err != nil {
 			return nil, nil, fmt.Errorf("search failed: %w", err)
 		}
-		if len(items) == 0 {
-			return textResult("No results found"), nil, nil
-		}
 		var b strings.Builder
+		found := 0
 		for _, item := range items {
 			if item.Data.ItemType == "attachment" || item.Data.ItemType == "note" {
 				continue
 			}
+			found++
 			fmt.Fprintf(&b, "[%s] %s (%s, %s)\n",
 				item.Key,
 				item.Data.Title,
@@ -119,12 +118,18 @@ func searchHandler(client *zotero.Client) mcp.ToolHandlerFor[searchInput, any] {
 				item.Data.Date,
 			)
 		}
+		if found == 0 {
+			return textResult("No results found"), nil, nil
+		}
 		return textResult(b.String()), nil, nil
 	}
 }
 
 func annotationsHandler(client *zotero.Client) mcp.ToolHandlerFor[annotationsInput, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input annotationsInput) (*mcp.CallToolResult, any, error) {
+		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
+			return nil, nil, err
+		}
 		anns, err := client.GetAnnotations(input.ItemKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get annotations: %w", err)
@@ -147,7 +152,10 @@ func annotationsHandler(client *zotero.Client) mcp.ToolHandlerFor[annotationsInp
 
 func contextHandler(client *zotero.Client) mcp.ToolHandlerFor[itemKeyInput, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input itemKeyInput) (*mcp.CallToolResult, any, error) {
-		bundle, err := client.GetContext(input.ItemKey)
+		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
+			return nil, nil, err
+		}
+		bundle, err := client.GetContext(input.ItemKey, true)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get context: %w", err)
 		}
@@ -198,10 +206,6 @@ func contextHandler(client *zotero.Client) mcp.ToolHandlerFor[itemKeyInput, any]
 	}
 }
 
-// aiGeneratedTag marks notes written via this server so they are
-// distinguishable from human-written notes in Zotero.
-const aiGeneratedTag = "ai-generated"
-
 func addNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[addNoteInput, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input addNoteInput) (*mcp.CallToolResult, any, error) {
 		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
@@ -211,14 +215,7 @@ func addNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[addNoteInput, any]
 			return nil, nil, fmt.Errorf("note body is empty")
 		}
 
-		tags := []string{aiGeneratedTag}
-		for _, t := range input.Tags {
-			t = strings.TrimSpace(t)
-			if t != "" && t != aiGeneratedTag {
-				tags = append(tags, t)
-			}
-		}
-
+		tags := zotero.NoteTags(input.Tags)
 		key, err := client.CreateNote(input.ItemKey, input.Body, tags)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create note: %w", err)

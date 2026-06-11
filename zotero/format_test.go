@@ -2,6 +2,10 @@ package zotero
 
 import "testing"
 
+// Contract: FormatAuthors produces the compact display form used in search
+// results and item details: "Last, First" joined with ";", institutional
+// authors by their single name field, capped at 3 with "et al.", and "-" when
+// unknown so table columns never collapse to empty strings.
 func TestFormatAuthors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -41,6 +45,8 @@ func TestFormatAuthors(t *testing.T) {
 	}
 }
 
+// Contract: tags render comma-joined, "-" when absent (same rationale as
+// FormatAuthors: display columns must never be empty).
 func TestFormatTags(t *testing.T) {
 	tests := []struct {
 		name string
@@ -61,6 +67,8 @@ func TestFormatTags(t *testing.T) {
 	}
 }
 
+// Contract: Truncate counts runes, not bytes — Japanese titles must cut at
+// N characters with an ellipsis, never mid-rune (which would emit mojibake).
 func TestTruncate(t *testing.T) {
 	tests := []struct {
 		name string

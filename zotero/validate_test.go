@@ -2,6 +2,10 @@ package zotero
 
 import "testing"
 
+// Contract: an item key is exactly 8 alphanumeric characters. Keys are
+// interpolated into API URL paths, so anything else (separators, spaces,
+// control chars) must be rejected before a request is built — this validator
+// is the shared guard for both the CLI and the MCP server.
 func TestValidateItemKey(t *testing.T) {
 	tests := []struct {
 		name    string

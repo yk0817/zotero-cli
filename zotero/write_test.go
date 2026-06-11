@@ -55,6 +55,8 @@ func decodeNotePayload(t *testing.T, body []byte) map[string]interface{} {
 	return payload[0]
 }
 
+// Contract: CreateNote POSTs to /items and returns the key Zotero assigned
+// to the created note, so callers can reference it afterwards.
 func TestCreateNoteReturnsKey(t *testing.T) {
 	client, rt := newRecordingClient(http.StatusOK, createNoteSuccess)
 
@@ -71,6 +73,9 @@ func TestCreateNoteReturnsKey(t *testing.T) {
 	}
 }
 
+// Contract: a plain-text body is converted to note HTML (newlines become
+// paragraphs) before being sent, because Zotero notes are HTML documents
+// and raw text would lose its line structure.
 func TestCreateNoteWrapsPlainTextAsHTML(t *testing.T) {
 	client, rt := newRecordingClient(http.StatusOK, createNoteSuccess)
 
@@ -89,6 +94,8 @@ func TestCreateNoteWrapsPlainTextAsHTML(t *testing.T) {
 	}
 }
 
+// Contract: a body that is already HTML is sent as-is — double-wrapping it
+// in <p> tags would corrupt the markup the caller built deliberately.
 func TestCreateNoteKeepsHTMLAsIs(t *testing.T) {
 	client, rt := newRecordingClient(http.StatusOK, createNoteSuccess)
 
@@ -103,6 +110,8 @@ func TestCreateNoteKeepsHTMLAsIs(t *testing.T) {
 	}
 }
 
+// Contract: tags passed to CreateNote are attached to the note item so
+// downstream filters (e.g. searching notes by tag) can find it.
 func TestCreateNoteSendsTags(t *testing.T) {
 	client, rt := newRecordingClient(http.StatusOK, createNoteSuccess)
 
@@ -118,6 +127,9 @@ func TestCreateNoteSendsTags(t *testing.T) {
 	}
 }
 
+// Contract: when Zotero accepts the request but reports the item in
+// "failed" (e.g. invalid parent key), CreateNote must surface an error
+// instead of returning an empty key as success.
 func TestCreateNoteFailedResponse(t *testing.T) {
 	client, _ := newRecordingClient(http.StatusOK, `{"successful":{},"failed":{"0":{"code":400,"message":"bad"}}}`)
 
@@ -128,6 +140,8 @@ func TestCreateNoteFailedResponse(t *testing.T) {
 	}
 }
 
+// Contract: non-2xx responses (auth failure, rate limit) become errors —
+// a write must never be reported as successful on an HTTP error.
 func TestCreateNoteAPIError(t *testing.T) {
 	client, _ := newRecordingClient(http.StatusForbidden, "forbidden")
 
@@ -135,5 +149,46 @@ func TestCreateNoteAPIError(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error for HTTP 403, got nil")
+	}
+}
+
+// Contract: plain text is HTML-escaped before wrapping, so characters that
+// are meaningful in HTML (&, <, >) survive verbatim in the saved note
+// instead of being parsed as markup and swallowed by Zotero's renderer.
+func TestPlainTextToNoteHTMLEscapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "html special chars escaped",
+			input: "loss i<j and AT&T",
+			want:  "<p>loss i&lt;j and AT&amp;T</p>",
+		},
+		{
+			name:  "leading < that is not a tag is treated as plain text",
+			input: "<- this arrow is not HTML",
+			want:  "<p>&lt;- this arrow is not HTML</p>",
+		},
+		{
+			name:  "real tag passes through unchanged",
+			input: "<p>already html</p>",
+			want:  "<p>already html</p>",
+		},
+		{
+			name:  "html comment passes through unchanged",
+			input: "<!-- comment -->",
+			want:  "<!-- comment -->",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PlainTextToNoteHTML(tt.input)
+			if got != tt.want {
+				t.Errorf("PlainTextToNoteHTML(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
