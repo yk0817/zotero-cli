@@ -334,8 +334,8 @@ func main() {
 
 			if isJSON() {
 				type fulltextData struct {
-					Item     *zotero.Item              `json:"item"`
-					FullText *zotero.FullTextResponse   `json:"fullText,omitempty"`
+					Item     *zotero.Item             `json:"item"`
+					FullText *zotero.FullTextResponse `json:"fullText,omitempty"`
 				}
 				result := fulltextData{Item: item}
 				if ftErr == nil {
@@ -427,8 +427,54 @@ func main() {
 	fullsearchCmd.Flags().StringVar(&fullsearchTag, "tag", "", "Filter by tag")
 	fullsearchCmd.Flags().IntVar(&fullsearchLimit, "limit", 25, "Number of items to display")
 
+	// annotations command
+	var annotationsColor string
+	var annotationsType string
+	annotationsCmd := &cobra.Command{
+		Use:   "annotations <itemKey>",
+		Short: "Show annotations (highlights/comments) of an item",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric item key (required)",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+			anns, err := client.GetAnnotations(args[0])
+			if err != nil {
+				return err
+			}
+			if len(anns) == 0 {
+				fmt.Fprintln(os.Stderr, "Note: annotations are only available via the Web API after Zotero sync. If you expect annotations here, check that sync is enabled.")
+			}
+			filtered := zotero.FilterAnnotations(anns, annotationsColor, annotationsType)
+			if isJSON() {
+				if filtered == nil {
+					filtered = []zotero.Item{}
+				}
+				return printJSON(filtered)
+			}
+			if len(filtered) == 0 {
+				fmt.Println("No annotations found")
+				return nil
+			}
+			for _, a := range filtered {
+				fmt.Println(zotero.FormatAnnotation(a))
+			}
+			return nil
+		},
+	}
+	annotationsCmd.Flags().StringVar(&annotationsColor, "color", "", "Filter by color (e.g. #ff0000)")
+	annotationsCmd.Flags().StringVar(&annotationsType, "type", "", "Filter by type: highlight, underline, note, ink, image")
+
 	// context command
 	var contextWithNotes bool
+	var contextWithAnnotations bool
 	var contextJSON bool
 	contextCmd := &cobra.Command{
 		Use:   "context <itemKey>",
@@ -477,6 +523,16 @@ func main() {
 				fmt.Println(bundle.FullText.Content)
 			}
 
+			if contextWithAnnotations {
+				fmt.Printf("\n=== ANNOTATIONS (%d) ===\n", len(bundle.Annotations))
+				if len(bundle.Annotations) == 0 {
+					fmt.Println("(none — if you expect annotations, check that Zotero sync is enabled)")
+				}
+				for _, a := range bundle.Annotations {
+					fmt.Println(zotero.FormatAnnotation(a))
+				}
+			}
+
 			if contextWithNotes && len(bundle.Notes) > 0 {
 				fmt.Printf("\n=== NOTES (%d) ===\n", len(bundle.Notes))
 				for i, note := range bundle.Notes {
@@ -501,6 +557,7 @@ func main() {
 		},
 	}
 	contextCmd.Flags().BoolVar(&contextWithNotes, "with-notes", false, "Include notes")
+	contextCmd.Flags().BoolVar(&contextWithAnnotations, "with-annotations", false, "Include annotations (highlights/comments)")
 	contextCmd.Flags().BoolVar(&contextJSON, "json", false, "Output as JSON (legacy, prefer --output json)")
 
 	// add-note command
@@ -764,7 +821,7 @@ func main() {
 					"title":       title,
 					"filesize":    filesize,
 					"md5":         md5hex,
-					"mtime":      mtime,
+					"mtime":       mtime,
 					"contentType": contentType,
 					"parentItem":  uploadParent,
 					"tags":        tags,
@@ -844,7 +901,7 @@ func main() {
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
-		fulltextCmd, fullsearchCmd, contextCmd, addNoteCmd, exportCmd, uploadCmd, schemaCmd)
+		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, exportCmd, uploadCmd, schemaCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		cliErr := classifyError(err)

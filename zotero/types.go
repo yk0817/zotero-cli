@@ -21,6 +21,16 @@ type ItemData struct {
 	ContentType      string    `json:"contentType,omitempty"`
 	Filename         string    `json:"filename,omitempty"`
 	ParentItem       string    `json:"parentItem,omitempty"`
+
+	// annotation fields (populated only for itemType == "annotation")
+	AnnotationType       string `json:"annotationType,omitempty"`
+	AnnotationText       string `json:"annotationText,omitempty"`
+	AnnotationComment    string `json:"annotationComment,omitempty"`
+	AnnotationColor      string `json:"annotationColor,omitempty"`
+	AnnotationPageLabel  string `json:"annotationPageLabel,omitempty"`
+	AnnotationSortIndex  string `json:"annotationSortIndex,omitempty"`
+	AnnotationPosition   string `json:"annotationPosition,omitempty"`
+	AnnotationAuthorName string `json:"annotationAuthorName,omitempty"`
 }
 
 // Creator represents an author or contributor.
@@ -72,4 +82,5 @@ type ContextBundle struct {
 	FullText    *FullTextResponse `json:"fullText,omitempty"`
 	Notes       []Item            `json:"notes,omitempty"`
 	Attachments []Item            `json:"attachments,omitempty"`
+	Annotations []Item            `json:"annotations,omitempty"`
 }

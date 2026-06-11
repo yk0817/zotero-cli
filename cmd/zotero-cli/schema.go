@@ -19,12 +19,12 @@ type CommandSchema struct {
 
 // FlagSchema describes a single flag for a command.
 type FlagSchema struct {
-	Name         string `json:"name"`
-	Shorthand    string `json:"shorthand,omitempty"`
-	Type         string `json:"type"`
-	Default      string `json:"default,omitempty"`
-	Description  string `json:"description"`
-	Required     bool   `json:"required,omitempty"`
+	Name        string `json:"name"`
+	Shorthand   string `json:"shorthand,omitempty"`
+	Type        string `json:"type"`
+	Default     string `json:"default,omitempty"`
+	Description string `json:"description"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 func newSchemaCmd(root *cobra.Command) *cobra.Command {
