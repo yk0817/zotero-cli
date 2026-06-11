@@ -5,24 +5,17 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"github.com/yk0817/zotero-cli/zotero"
 )
 
-// validateItemKey checks that a key is exactly 8 alphanumeric characters.
+// validateItemKey wraps zotero.ValidateItemKey with a CLI error envelope.
 func validateItemKey(key string) error {
-	if len(key) != 8 {
+	if err := zotero.ValidateItemKey(key); err != nil {
 		return &CLIError{
 			Code:       ErrCodeValidation,
-			Message:    fmt.Sprintf("invalid item key %q: must be exactly 8 characters", key),
+			Message:    err.Error(),
 			Suggestion: "Item keys are 8 alphanumeric characters, e.g. ABCD1234",
-		}
-	}
-	for _, r := range key {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			return &CLIError{
-				Code:       ErrCodeValidation,
-				Message:    fmt.Sprintf("invalid item key %q: contains non-alphanumeric character", key),
-				Suggestion: "Item keys are 8 alphanumeric characters, e.g. ABCD1234",
-			}
 		}
 	}
 	return nil

@@ -1,4 +1,6 @@
-// Command zotero-mcp is a read-only MCP server exposing the Zotero Web API.
+// Command zotero-mcp is an MCP server exposing the Zotero Web API.
+// Read tools cover search, annotations, and item context; the only write
+// tool is zotero_add_note, which creates notes tagged "ai-generated".
 // It shares the zotero package with the CLI and reads the same config file
 // (~/.config/zotero-cli/config.json).
 package main
@@ -88,6 +90,12 @@ type annotationsInput struct {
 	ItemKey string `json:"item_key" jsonschema:"8-character alphanumeric Zotero item key"`
 	Color   string `json:"color,omitempty" jsonschema:"optional color filter, e.g. #ff0000"`
 	Type    string `json:"type,omitempty" jsonschema:"optional type filter: highlight, underline, note, ink, image"`
+}
+
+type addNoteInput struct {
+	ItemKey string   `json:"item_key" jsonschema:"8-character alphanumeric Zotero item key of the parent item"`
+	Body    string   `json:"body" jsonschema:"note content; plain text (paragraphs split on newlines) or HTML"`
+	Tags    []string `json:"tags,omitempty" jsonschema:"optional extra tags; the 'ai-generated' tag is always added"`
 }
 
 func searchHandler(client *zotero.Client) mcp.ToolHandlerFor[searchInput, any] {
@@ -190,6 +198,36 @@ func contextHandler(client *zotero.Client) mcp.ToolHandlerFor[itemKeyInput, any]
 	}
 }
 
+// aiGeneratedTag marks notes written via this server so they are
+// distinguishable from human-written notes in Zotero.
+const aiGeneratedTag = "ai-generated"
+
+func addNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[addNoteInput, any] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, input addNoteInput) (*mcp.CallToolResult, any, error) {
+		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
+			return nil, nil, err
+		}
+		if strings.TrimSpace(input.Body) == "" {
+			return nil, nil, fmt.Errorf("note body is empty")
+		}
+
+		tags := []string{aiGeneratedTag}
+		for _, t := range input.Tags {
+			t = strings.TrimSpace(t)
+			if t != "" && t != aiGeneratedTag {
+				tags = append(tags, t)
+			}
+		}
+
+		key, err := client.CreateNote(input.ItemKey, input.Body, tags)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create note: %w", err)
+		}
+		return textResult(fmt.Sprintf("Note created: %s (parent: %s, tags: %s)",
+			key, input.ItemKey, strings.Join(tags, ", "))), nil, nil
+	}
+}
+
 func main() {
 	client, err := loadClient()
 	if err != nil {
@@ -215,6 +253,11 @@ func main() {
 		Name:        "zotero_get_context",
 		Description: "Get all information about a Zotero item: metadata, abstract, full text, annotations, notes, and attachments.",
 	}, contextHandler(client))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "zotero_add_note",
+		Description: "Add a note (memo, summary, comment) to a Zotero item. The note is tagged 'ai-generated'. Body accepts plain text or HTML.",
+	}, addNoteHandler(client))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("zotero-mcp: server error: %v", err)
