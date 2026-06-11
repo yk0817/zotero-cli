@@ -99,6 +99,8 @@ func TestSearchItemsAPIError(t *testing.T) {
 	}
 }
 
+// Contract: a malformed JSON body is an error — a truncated or non-JSON
+// response must never be silently treated as an empty result set.
 func TestSearchItemsInvalidJSON(t *testing.T) {
 	client, _ := newQueryClient("not json")
 
