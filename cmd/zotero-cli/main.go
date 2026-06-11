@@ -493,7 +493,7 @@ func main() {
 			}
 			itemKey := args[0]
 
-			bundle, err := client.GetContext(itemKey)
+			bundle, err := client.GetContext(itemKey, contextWithAnnotations)
 			if err != nil {
 				return err
 			}
@@ -603,15 +603,11 @@ func main() {
 				}
 			}
 
-			tags := []string{"ai-generated"}
+			var extraTags []string
 			if noteTags != "" {
-				for _, t := range strings.Split(noteTags, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" && t != "ai-generated" {
-						tags = append(tags, t)
-					}
-				}
+				extraTags = strings.Split(noteTags, ",")
 			}
+			tags := zotero.NoteTags(extraTags)
 
 			if noteDryRun {
 				payload := map[string]any{

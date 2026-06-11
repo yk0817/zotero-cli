@@ -193,7 +193,7 @@ func main() {
 
 ## MCP Server
 
-`cmd/zotero-mcp` is a read-only [MCP](https://modelcontextprotocol.io/) server that exposes the same `zotero` package over stdio. It reuses the CLI config (`~/.config/zotero-cli/config.json`), so run `zotero-cli config` first.
+`cmd/zotero-mcp` is an [MCP](https://modelcontextprotocol.io/) server that exposes the same `zotero` package over stdio. It reuses the CLI config (`~/.config/zotero-cli/config.json`), so run `zotero-cli config` first.
 
 ### Build
 
@@ -230,8 +230,9 @@ Add the same `command` entry to the client's MCP config (e.g., `~/.cursor/mcp.js
 | `zotero_search` | `query`, `tag?` | Search library items; returns keys, titles, authors, dates |
 | `zotero_get_annotations` | `item_key`, `color?`, `type?` | PDF annotations in reading order, optionally filtered |
 | `zotero_get_context` | `item_key` | Metadata + abstract + full text + annotations + notes + attachments |
+| `zotero_add_note` | `item_key`, `body`, `tags?` | Create a child note on an item; always tagged `ai-generated` |
 
-All tools are read-only (GET requests only). If an item has no synced annotations, the tools return a hint about Zotero sync instead of an empty response.
+`zotero_add_note` is the only write tool; everything else is read-only. If an item has no synced annotations, the read tools return a hint about Zotero sync instead of an empty response.
 
 ## Claude Code Integration
 
@@ -330,7 +331,7 @@ zotero-cli/
 │   ├── schema.go        # Schema command for agent discovery
 │   └── validate.go      # Input validation
 ├── cmd/zotero-mcp/
-│   └── main.go          # Read-only MCP server (stdio)
+│   └── main.go          # MCP server (stdio): read tools + zotero_add_note
 ├── .claude/commands/
 │   ├── summarize.md     # Paper summarization (Japanese)
 │   ├── critique.md      # Critical analysis (Japanese)

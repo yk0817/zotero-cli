@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -242,18 +244,33 @@ func (c *Client) FullTextSearch(query string, tag string, limit int) ([]Item, er
 	return items, nil
 }
 
-// GetChildren retrieves child items (notes, attachments) of an item.
-func (c *Client) GetChildren(itemKey string) ([]Item, error) {
-	body, err := c.doRequest(fmt.Sprintf("/items/%s/children", itemKey), nil, "application/json")
-	if err != nil {
-		return nil, err
-	}
+// childrenPageSize is the Zotero API maximum page size. Without an explicit
+// limit the API returns only 25 items, silently truncating annotation lists.
+const childrenPageSize = 100
 
-	var items []Item
-	if err := json.Unmarshal(body, &items); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+// GetChildren retrieves all child items (notes, attachments, annotations)
+// of an item, following pagination so results beyond one page are not lost.
+func (c *Client) GetChildren(itemKey string) ([]Item, error) {
+	var all []Item
+	for start := 0; ; start += childrenPageSize {
+		params := url.Values{}
+		params.Set("limit", fmt.Sprintf("%d", childrenPageSize))
+		params.Set("start", fmt.Sprintf("%d", start))
+
+		body, err := c.doRequest(fmt.Sprintf("/items/%s/children", itemKey), params, "application/json")
+		if err != nil {
+			return nil, err
+		}
+
+		var page []Item
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON: %w", err)
+		}
+		all = append(all, page...)
+		if len(page) < childrenPageSize {
+			return all, nil
+		}
 	}
-	return items, nil
 }
 
 // GetAnnotations returns all annotations under an item's attachments,
@@ -306,7 +323,7 @@ func FilterAnnotations(anns []Item, color, annType string) []Item {
 		if color != "" && !strings.EqualFold(a.Data.AnnotationColor, color) {
 			continue
 		}
-		if annType != "" && a.Data.AnnotationType != annType {
+		if annType != "" && !strings.EqualFold(a.Data.AnnotationType, annType) {
 			continue
 		}
 		filtered = append(filtered, a)
@@ -314,11 +331,24 @@ func FilterAnnotations(anns []Item, color, annType string) []Item {
 	return filtered
 }
 
+// htmlNotePattern detects bodies that are already HTML (start with a tag,
+// comment, or doctype) as opposed to plain text that merely begins with '<'.
+var htmlNotePattern = regexp.MustCompile(`^<[a-zA-Z!/]`)
+
+// PlainTextToNoteHTML converts plain text to Zotero note HTML: special
+// characters are escaped and newlines become paragraph boundaries.
+// Content that already looks like HTML is returned unchanged.
+func PlainTextToNoteHTML(content string) string {
+	if htmlNotePattern.MatchString(strings.TrimSpace(content)) {
+		return content
+	}
+	escaped := html.EscapeString(content)
+	return "<p>" + strings.ReplaceAll(escaped, "\n", "</p>\n<p>") + "</p>"
+}
+
 // CreateNote creates a note attached to a parent item.
 func (c *Client) CreateNote(parentKey, content string, tags []string) (string, error) {
-	if !strings.HasPrefix(strings.TrimSpace(content), "<") {
-		content = "<p>" + strings.ReplaceAll(content, "\n", "</p>\n<p>") + "</p>"
-	}
+	content = PlainTextToNoteHTML(content)
 
 	tagObjs := []Tag{}
 	for _, t := range tags {
@@ -400,7 +430,9 @@ func (c *Client) GetItemsByKeys(keys []string) ([]Item, error) {
 }
 
 // GetContext retrieves all information about an item (metadata, fulltext, notes, attachments).
-func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
+// Annotations cost one extra API request per attachment, so they are fetched
+// only when withAnnotations is true.
+func (c *Client) GetContext(itemKey string, withAnnotations bool) (*ContextBundle, error) {
 	item, err := c.GetItem(itemKey)
 	if err != nil {
 		return nil, err
@@ -422,9 +454,12 @@ func (c *Client) GetContext(itemKey string) (*ContextBundle, error) {
 		}
 	}
 
-	annotations, err := c.annotationsUnder(children)
-	if err != nil {
-		return nil, err
+	var annotations []Item
+	if withAnnotations {
+		annotations, err = c.annotationsUnder(children)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &ContextBundle{

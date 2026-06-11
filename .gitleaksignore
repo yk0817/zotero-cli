@@ -1,0 +1,2 @@
+# テスト用ダミー item key（"ABCD1234/children"）を generic-api-key と誤検知
+cmd/zotero-mcp/main_test.go:generic-api-key:271

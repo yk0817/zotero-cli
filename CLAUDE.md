@@ -66,6 +66,6 @@ PDF annotations (highlights/comments) live under each attachment's children and 
 ## Project Structure
 
 - `cmd/zotero-cli/` — CLI entry point (Cobra commands)
-- `cmd/zotero-mcp/` — Read-only MCP server (stdio, official Go SDK)
+- `cmd/zotero-mcp/` — MCP server (stdio, official Go SDK); read tools + `zotero_add_note` write tool
 - `zotero/` — API client library (types, HTTP client)
 - `.claude/commands/` — Claude Code slash commands for paper analysis
