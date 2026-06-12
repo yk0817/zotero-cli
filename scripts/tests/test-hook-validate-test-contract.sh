@@ -6,6 +6,11 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/../hook-validate-test-contract.sh"
 
+if ! command -v jq > /dev/null 2>&1; then
+  echo "SKIP: jq not installed (required to build hook input)"
+  exit 0
+fi
+
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -140,6 +145,74 @@ EOF
 else
   echo "SKIP: gofmt not installed"
 fi
+
+# --- ケース9: テスト関数でないTest接頭辞ヘルパー（小文字続き）は対象外 ---
+cat > "$TMP_ROOT/helper_test.go" <<'EOF'
+package zotero
+
+import "testing"
+
+// Contract: real test functions are still checked.
+func TestReal(t *testing.T) {
+	t.Log("ok")
+}
+
+func Testdata(x int) int {
+	return x
+}
+EOF
+run_hook "$TMP_ROOT/helper_test.go"
+assert_case "lowercase Test-prefix helper is exempt" 0 $?
+
+# --- ケース10: 構文エラーのファイルは素通しせずブロック（gofmt導入時のみ） ---
+if command -v gofmt > /dev/null 2>&1; then
+  cat > "$TMP_ROOT/broken_test.go" <<'EOF'
+package zotero
+
+import "testing"
+
+// Contract: syntax errors must not pass the gate.
+func TestBroken(t *testing.T) {
+	t.Log("missing brace"
+}
+EOF
+  run_hook "$TMP_ROOT/broken_test.go"
+  assert_case "syntax error is blocked" 2 $? "gofmt"
+fi
+
+# --- ケース11: --check-all はリポジトリ内の全 *_test.go を走査する ---
+REPO_DIR="$TMP_ROOT/repo"
+mkdir -p "$REPO_DIR"
+git -C "$REPO_DIR" init -q
+git -C "$REPO_DIR" config user.email "test@example.com"
+git -C "$REPO_DIR" config user.name "test"
+cat > "$REPO_DIR/good_test.go" <<'EOF'
+package zotero
+
+import "testing"
+
+// Contract: covered.
+func TestGood(t *testing.T) {
+	t.Log("ok")
+}
+EOF
+cat > "$REPO_DIR/bad_test.go" <<'EOF'
+package zotero
+
+import "testing"
+
+func TestBadNoContract(t *testing.T) {
+	t.Log("ng")
+}
+EOF
+git -C "$REPO_DIR" add -A
+(cd "$REPO_DIR" && bash "$HOOK" --check-all > /dev/null 2> "$TMP_ROOT/stderr.txt")
+assert_case "--check-all detects violation in tracked files" 2 $? "TestBadNoContract"
+
+rm "$REPO_DIR/bad_test.go"
+git -C "$REPO_DIR" add -A
+(cd "$REPO_DIR" && bash "$HOOK" --check-all > /dev/null 2> "$TMP_ROOT/stderr.txt")
+assert_case "--check-all passes when all tracked files comply" 0 $?
 
 echo "---"
 echo "PASS: $PASS, FAIL: $FAIL"

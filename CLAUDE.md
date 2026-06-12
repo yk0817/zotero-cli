@@ -12,7 +12,7 @@ go test -race ./...
 ## Test Harness
 
 - **テストを書く前に `knowledge-base/qa-perspectives.md`（観点チェックリスト）と `knowledge-base/test-style-guide.md`（形式）を Read する**。P1 観点は必ずテストに紐付ける
-- 全 Test 関数に `// Contract:` コメント必須 — hook（`scripts/hook-validate-test-contract.sh`）が `*_test.go` 書き込み時に自動検証し、違反はブロックされる
+- 全 Test 関数に `// Contract:` コメント必須 — hook（`scripts/hook-validate-test-contract.sh`）が `*_test.go` 書き込み直後に検証して違反を差し戻し、CI が全ファイルを再検証する
 - テスト設計の一括実行は `/test-design <対象>`（観点マトリクス→生成→検証→カバレッジ表）
 - バグ修正時は回帰テスト追加後、qa-perspectives.md の「過去バグ由来の観点」表に追記する
 

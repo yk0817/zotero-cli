@@ -1,11 +1,12 @@
 # テストスタイルガイド（zotero-cli）
 
 生成・手書きを問わず、このリポジトリのテストは以下の形式に従う。
-形式の一部（Contract コメント・gofmt）は hook（`scripts/hook-validate-test-contract.sh`）が自動検証し、違反はファイル書き込み時にブロックされる。
+一般原則（TDD・hermetic・カバレッジ等）はグローバルの testing ルールに従い、ここには**このリポジトリ固有の規約**だけを書く。
+形式の一部（Contract コメント・gofmt）は hook（`scripts/hook-validate-test-contract.sh`）が書き込み直後に検証して違反を差し戻し、CI（`--check-all`）が全ファイルを再検証する。
 
 ## Contract コメント（必須・hook 検証対象）
 
-すべてのトップレベル `func TestXxx` の直前に、**何の契約を固定するか・なぜその挙動が必要か**を書く。
+すべてのトップレベル `func TestXxx` の直前に、**何の契約を固定するか・なぜその挙動が必要か**を `//` 行コメントで書く（hook は `/* */` ブロックコメントを認識しない）。
 
 ```go
 // Contract: GetChildren follows pagination instead of trusting one page.
@@ -17,7 +18,7 @@ func TestGetChildrenPaginates(t *testing.T) {
 
 - 「何をするか」ではなく「**何が壊れたら誰がどう困るか**」まで書く
 - 過去バグ由来のテストは [qa-perspectives.md](qa-perspectives.md) の該当行を参照する
-- `TestMain` は対象外
+- `TestMain` と、go test がテストと見なさない小文字続きの `Test*` ヘルパーは対象外
 
 ## テスト名
 

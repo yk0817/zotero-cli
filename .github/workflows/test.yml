@@ -32,3 +32,6 @@ jobs:
 
       - name: Hook regression tests
         run: bash scripts/tests/test-hook-validate-test-contract.sh
+
+      - name: Test contract check (all tracked test files)
+        run: bash scripts/hook-validate-test-contract.sh --check-all
