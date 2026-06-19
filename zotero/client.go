@@ -400,7 +400,7 @@ func (c *Client) doDeleteRequest(endpoint string, version int) error {
 	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
 	req, err := http.NewRequest(http.MethodDelete, u, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build delete request for %s: %w", endpoint, err)
 	}
 	req.Header.Set("Zotero-API-Key", c.APIKey)
 	req.Header.Set("Zotero-API-Version", "3")
@@ -413,10 +413,15 @@ func (c *Client) doDeleteRequest(endpoint string, version int) error {
 	defer resp.Body.Close()
 
 	// A successful single-item delete returns 204 No Content. Anything else
-	// (404 gone, 412 version conflict, 403 auth) is surfaced verbatim so the
-	// caller never mistakes a non-deletion for success.
+	// (404 gone, 412 version conflict, 403 auth) is surfaced so the caller
+	// never mistakes a non-deletion for success. On a destructive op the error
+	// detail matters, so a failure to even read the body is reported rather
+	// than swallowed into a blank message.
 	if resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("API error (HTTP %d): <response body unreadable: %v>", resp.StatusCode, readErr)
+		}
 		return fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 	return nil
