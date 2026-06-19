@@ -10,12 +10,16 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"github.com/yk0817/zotero-cli/zotero"
 )
+
+// noteTagPattern strips HTML tags when building a plain-text note preview.
+var noteTagPattern = regexp.MustCompile(`<[^>]*>`)
 
 // Config holds the API credentials.
 type Config struct {
@@ -649,6 +653,96 @@ func main() {
 	addNoteCmd.Flags().StringVar(&noteTags, "tags", "", "Comma-separated tags (ai-generated is always added)")
 	addNoteCmd.Flags().BoolVar(&noteDryRun, "dry-run", false, "Show payload without making API call")
 
+	// delete-note command
+	//
+	// Guardrails layered on top of the zotero.DeleteNote structural guards
+	// (notes-only, single-key, lost-update-safe):
+	//   - Approval flow. The command ALWAYS shows what it is about to delete,
+	//     then requires explicit approval before doing it. Interactively that
+	//     means typing "yes" at a prompt; for non-interactive callers (scripts,
+	//     this CLI driven by an agent) the --yes flag pre-approves the one key
+	//     that was named. Either way the destructive step never happens from a
+	//     bare command — there is no path where deletion occurs without a
+	//     deliberate, per-invocation confirmation.
+	//   - No bulk deletion. The command takes exactly one key and has no
+	//     by-tag / by-query / "delete all" mode, so a single approval can only
+	//     ever remove a single note.
+	//   - Type-checked before the prompt. We fetch and reject non-note items up
+	//     front, so the preview makes it obvious you pointed at the wrong key
+	//     before any approval is given.
+	// The CLI intentionally does NOT require the ai-generated tag: a human has
+	// named one explicit key and approved it, so they may delete any note (the
+	// MCP path keeps that extra guard because it runs unattended).
+	var deleteNoteYes bool
+	deleteNoteCmd := &cobra.Command{
+		Use:   "delete-note <itemKey>",
+		Short: "Delete a single note (guardrailed: notes only, one key, approval required)",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric key of the note to delete (required)",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			item, err := client.GetItem(args[0])
+			if err != nil {
+				return err
+			}
+			if item.Data.ItemType != "note" {
+				return &CLIError{
+					Code:       ErrCodeValidation,
+					Message:    fmt.Sprintf("refusing to delete %s: item type is %q, not \"note\"", args[0], item.Data.ItemType),
+					Suggestion: "This command only deletes notes. Delete other item types in the Zotero app.",
+				}
+			}
+
+			// JSON mode cannot prompt; require --yes as the machine-readable
+			// approval. Without it we report what would be deleted and stop.
+			if isJSON() {
+				if !deleteNoteYes {
+					return printJSON(map[string]any{
+						"wouldDelete":          true,
+						"noteKey":              item.Key,
+						"parentItem":           item.Data.ParentItem,
+						"tags":                 tagStrings(item.Data.Tags),
+						"confirmationRequired": "re-run with --yes to delete",
+					})
+				}
+				deleted, err := client.DeleteNote(args[0], false)
+				if err != nil {
+					return err
+				}
+				return printJSON(map[string]any{"deleted": true, "noteKey": deleted.Key})
+			}
+
+			// Text mode: show the note, then require approval.
+			fmt.Println("=== NOTE TO DELETE ===")
+			printNotePreview(item)
+			if !deleteNoteYes {
+				fmt.Print("\nDelete this note? Type 'yes' to confirm: ")
+				answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				if strings.TrimSpace(answer) != "yes" {
+					fmt.Println("Aborted — no note was deleted.")
+					return nil
+				}
+			}
+
+			deleted, err := client.DeleteNote(args[0], false)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Note deleted: %s\n", deleted.Key)
+			return nil
+		},
+	}
+	deleteNoteCmd.Flags().BoolVar(&deleteNoteYes, "yes", false, "Pre-approve deletion (skips the interactive prompt; required in --output json mode)")
+
 	// export command
 	var exportCollection string
 	var exportTag string
@@ -897,7 +991,7 @@ func main() {
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
-		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, exportCmd, uploadCmd, schemaCmd)
+		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd, schemaCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		cliErr := classifyError(err)
@@ -952,6 +1046,36 @@ func printItemDetail(item *zotero.Item) {
 	if d.AbstractNote != "" {
 		fmt.Printf("\nAbstract:\n%s\n", d.AbstractNote)
 	}
+}
+
+// tagStrings extracts plain tag strings for JSON output.
+func tagStrings(tags []zotero.Tag) []string {
+	out := []string{}
+	for _, t := range tags {
+		out = append(out, t.Tag)
+	}
+	return out
+}
+
+// printNotePreview shows what a delete-note would remove: the key, its parent,
+// tags, and a short snippet of the body so the human can recognise the note
+// before confirming with --yes.
+func printNotePreview(item *zotero.Item) {
+	fmt.Printf("Key:        %s\n", item.Key)
+	if item.Data.ParentItem != "" {
+		fmt.Printf("Parent:     %s\n", item.Data.ParentItem)
+	}
+	fmt.Printf("Tags:       %s\n", zotero.FormatTags(item.Data.Tags))
+	snippet := zotero.Truncate(noteSnippet(item.Data.Note), 200)
+	if snippet != "" {
+		fmt.Printf("Preview:    %s\n", snippet)
+	}
+}
+
+// noteSnippet reduces note HTML to a one-line plain-text preview.
+func noteSnippet(noteHTML string) string {
+	s := noteTagPattern.ReplaceAllString(noteHTML, " ")
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func printCollectionTable(collections []zotero.Collection) {

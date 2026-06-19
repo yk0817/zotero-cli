@@ -129,7 +129,18 @@ cat notes.md | zotero-cli add-note FQVL7ZHM --body-file -
 
 # Preview without making API call
 zotero-cli add-note FQVL7ZHM --body "test" --dry-run
+
+# Delete a single note (guardrailed, with approval flow)
+zotero-cli delete-note NOTE5678            # shows the note, then asks: type 'yes' to confirm
+zotero-cli delete-note NOTE5678 --yes      # pre-approves (skips the prompt; for scripts/agents)
 ```
+
+**Delete guardrails.** `delete-note` is fenced so it can only remove the cheapest-to-recreate item, one at a time:
+
+- **Notes only** — refuses any item whose type is not `note` (papers, PDFs, annotations are rejected up front), so a mistyped key cannot destroy a library item.
+- **Approval required** — the command always prints the note first, then requires explicit approval: interactively you type `yes`; non-interactively you pass `--yes`. Deletion never happens from a bare command. (In `--output json` mode `--yes` is mandatory, since a prompt cannot be shown.)
+- **One key, no bulk** — there is intentionally no delete-by-tag/by-query/all; a single approval can only remove a single note. Mass deletion would have to be scripted by looping over keys you have already listed and approved.
+- **Lost-update safe** — uses the item's version (`If-Unmodified-Since-Version`), so a note edited since you read it is rejected (HTTP 412) instead of clobbered.
 
 ### Collections
 
@@ -231,8 +242,11 @@ Add the same `command` entry to the client's MCP config (e.g., `~/.cursor/mcp.js
 | `zotero_get_annotations` | `item_key`, `color?`, `type?` | PDF annotations in reading order, optionally filtered |
 | `zotero_get_context` | `item_key` | Metadata + abstract + full text + annotations + notes + attachments |
 | `zotero_add_note` | `item_key`, `body`, `tags?` | Create a child note on an item; always tagged `ai-generated` |
+| `zotero_delete_note` | `item_key`, `confirm` | Delete a single `ai-generated` note; `confirm=false` previews, `confirm=true` deletes |
 
-`zotero_add_note` is the only write tool; everything else is read-only. If an item has no synced annotations, the read tools return a hint about Zotero sync instead of an empty response.
+`zotero_add_note` and `zotero_delete_note` are the only write tools; everything else is read-only. If an item has no synced annotations, the read tools return a hint about Zotero sync instead of an empty response.
+
+Because the MCP server runs unattended, `zotero_delete_note` carries an extra guardrail beyond the CLI: it deletes **only notes that carry the `ai-generated` tag**, so the model can undo notes it created but can never remove a human-written note, a paper, or an attachment. It also takes one key per call (no bulk deletion) and requires `confirm=true` after a preview.
 
 ## Claude Code Integration
 
