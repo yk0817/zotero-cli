@@ -1,8 +1,18 @@
 // Command zotero-mcp is an MCP server exposing the Zotero Web API.
-// Read tools cover search, annotations, and item context; the only write
-// tool is zotero_add_note, which creates notes tagged "ai-generated".
-// It shares the zotero package with the CLI and reads the same config file
-// (~/.config/zotero-cli/config.json).
+// Read tools cover search, annotations, and item context. The write tools are
+// zotero_add_note (creates notes tagged "ai-generated") and zotero_delete_note
+// (removes a single such note). It shares the zotero package with the CLI and
+// reads the same config file (~/.config/zotero-cli/config.json).
+//
+// Delete guardrails. Because this server runs unattended, zotero_delete_note is
+// fenced so the model can only ever undo its own writes:
+//   - notes only (refuses papers, attachments, annotations),
+//   - ai-generated tag required (refuses human-written notes),
+//   - one key per call, no bulk/by-query deletion,
+//   - confirm=true required (a bare call only previews).
+//
+// The notes-only and tag checks live in zotero.DeleteNote; the preview gate is
+// enforced here in the handler.
 package main
 
 import (
@@ -96,6 +106,11 @@ type addNoteInput struct {
 	ItemKey string   `json:"item_key" jsonschema:"8-character alphanumeric Zotero item key of the parent item"`
 	Body    string   `json:"body" jsonschema:"note content; plain text (paragraphs split on newlines) or HTML"`
 	Tags    []string `json:"tags,omitempty" jsonschema:"optional extra tags; the 'ai-generated' tag is always added"`
+}
+
+type deleteNoteInput struct {
+	ItemKey string `json:"item_key" jsonschema:"8-character alphanumeric key of the note to delete; must be a note, not a paper or attachment"`
+	Confirm bool   `json:"confirm" jsonschema:"must be true to actually delete; when false (default) the note is only previewed, not deleted"`
 }
 
 func searchHandler(client *zotero.Client) mcp.ToolHandlerFor[searchInput, any] {
@@ -225,6 +240,41 @@ func addNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[addNoteInput, any]
 	}
 }
 
+// deleteNoteHandler deletes one AI-generated note. The two-step confirm is the
+// guardrail the LLM sees: a first call previews (so the model and the human in
+// the loop can see exactly which note is targeted), and only an explicit
+// confirm=true second call performs the deletion. The structural guards
+// (notes-only, ai-generated-tag-only, lost-update-safe) are enforced inside
+// zotero.DeleteNote so they hold even if this handler is wrong.
+func deleteNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[deleteNoteInput, any] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, input deleteNoteInput) (*mcp.CallToolResult, any, error) {
+		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
+			return nil, nil, err
+		}
+
+		item, err := client.GetItem(input.ItemKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to fetch %s: %w", input.ItemKey, err)
+		}
+		if item.Data.ItemType != "note" {
+			return nil, nil, fmt.Errorf("refusing to delete %s: item type is %q, not \"note\"", input.ItemKey, item.Data.ItemType)
+		}
+		if !item.HasTag(zotero.AIGeneratedTag) {
+			return nil, nil, fmt.Errorf("refusing to delete %s: note lacks the %q tag (this tool only deletes AI-generated notes)", input.ItemKey, zotero.AIGeneratedTag)
+		}
+
+		if !input.Confirm {
+			return textResult(fmt.Sprintf("Would delete note %s (parent: %s, tags: %s). Call again with confirm=true to delete.",
+				item.Key, item.Data.ParentItem, zotero.FormatTags(item.Data.Tags))), nil, nil
+		}
+
+		if _, err := client.DeleteNote(input.ItemKey, true); err != nil {
+			return nil, nil, fmt.Errorf("failed to delete note: %w", err)
+		}
+		return textResult(fmt.Sprintf("Note deleted: %s", input.ItemKey)), nil, nil
+	}
+}
+
 func main() {
 	client, err := loadClient()
 	if err != nil {
@@ -255,6 +305,11 @@ func main() {
 		Name:        "zotero_add_note",
 		Description: "Add a note (memo, summary, comment) to a Zotero item. The note is tagged 'ai-generated'. Body accepts plain text or HTML.",
 	}, addNoteHandler(client))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "zotero_delete_note",
+		Description: "Delete a single AI-generated note by its key. Guardrailed: only deletes items of type 'note' that carry the 'ai-generated' tag (never papers, attachments, or human-written notes), one key per call. Call with confirm=false first to preview, then confirm=true to delete.",
+	}, deleteNoteHandler(client))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("zotero-mcp: server error: %v", err)

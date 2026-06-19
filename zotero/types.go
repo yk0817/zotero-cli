@@ -1,9 +1,28 @@
 package zotero
 
+import "strings"
+
 // Item represents a Zotero library item.
 type Item struct {
-	Key  string   `json:"key"`
-	Data ItemData `json:"data"`
+	Key string `json:"key"`
+	// Version is the item's object version. The Zotero API uses it for
+	// optimistic concurrency: a DELETE must echo it back in the
+	// If-Unmodified-Since-Version header, so an item modified after we read
+	// it is rejected (HTTP 412) instead of being clobbered.
+	Version int      `json:"version"`
+	Data    ItemData `json:"data"`
+}
+
+// HasTag reports whether the item carries tag (case-insensitive). Used by the
+// delete guardrails to tell AI-created notes (tagged AIGeneratedTag) apart
+// from human-written ones.
+func (it *Item) HasTag(tag string) bool {
+	for _, t := range it.Data.Tags {
+		if strings.EqualFold(t.Tag, tag) {
+			return true
+		}
+	}
+	return false
 }
 
 // ItemData holds the metadata fields of a Zotero item.

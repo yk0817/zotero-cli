@@ -387,6 +387,87 @@ func (c *Client) CreateNote(parentKey, content string, tags []string) (string, e
 	return "", fmt.Errorf("unexpected empty response")
 }
 
+// doDeleteRequest sends a DELETE to the Zotero API with the optimistic
+// concurrency header required for single-item deletion.
+//
+// Guardrail (lost-update protection): Zotero requires
+// If-Unmodified-Since-Version on a single-item DELETE. By echoing the version
+// we read moments earlier, a note that was edited in between (by the desktop
+// app, sync, or another client) is rejected with HTTP 412 rather than being
+// silently destroyed. This is why DeleteNote always re-reads the item right
+// before deleting instead of trusting a version passed in from far away.
+func (c *Client) doDeleteRequest(endpoint string, version int) error {
+	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
+	req, err := http.NewRequest(http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build delete request for %s: %w", endpoint, err)
+	}
+	req.Header.Set("Zotero-API-Key", c.APIKey)
+	req.Header.Set("Zotero-API-Version", "3")
+	req.Header.Set("If-Unmodified-Since-Version", fmt.Sprintf("%d", version))
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// A successful single-item delete returns 204 No Content. Anything else
+	// (404 gone, 412 version conflict, 403 auth) is surfaced so the caller
+	// never mistakes a non-deletion for success. On a destructive op the error
+	// detail matters, so a failure to even read the body is reported rather
+	// than swallowed into a blank message.
+	if resp.StatusCode != http.StatusNoContent {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("API error (HTTP %d): <response body unreadable: %v>", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// DeleteNote deletes a single note item, guarded so it can only ever remove
+// one note that the caller has positively identified.
+//
+// The design deliberately makes the *dangerous* directions impossible rather
+// than relying on the caller to be careful:
+//
+//   - Notes only. We re-read the item and refuse anything whose itemType is
+//     not "note". A mistyped or stale key therefore cannot delete a paper, a
+//     PDF attachment, or a highlight — only a note, the cheapest thing to
+//     recreate. This is a structural guard, not a warning the caller can skip.
+//   - One key, no bulk. The API surface takes exactly one itemKey and has no
+//     "delete by tag / by query / all" path. There is intentionally no way to
+//     express "delete every ai-summary note" here; mass deletion would have to
+//     be built explicitly by a caller looping over keys it has already listed
+//     and shown, which keeps the blast radius of any single call at one item.
+//   - Caller-created only (opt-in). When requireAIGenerated is true the note
+//     must also carry AIGeneratedTag, so an autonomous caller (the MCP server)
+//     can delete notes it produced but never a human's hand-written note. The
+//     CLI passes false because a human has already confirmed the specific key.
+//   - Lost-update safe. Deletion uses the version from the read above via
+//     If-Unmodified-Since-Version (see doDeleteRequest).
+//
+// On success it returns the deleted note's metadata so the caller can echo
+// exactly what was removed.
+func (c *Client) DeleteNote(itemKey string, requireAIGenerated bool) (*Item, error) {
+	item, err := c.GetItem(itemKey)
+	if err != nil {
+		return nil, err
+	}
+	if item.Data.ItemType != "note" {
+		return nil, fmt.Errorf("refusing to delete %s: item type is %q, not \"note\" (this operation only deletes notes)", itemKey, item.Data.ItemType)
+	}
+	if requireAIGenerated && !item.HasTag(AIGeneratedTag) {
+		return nil, fmt.Errorf("refusing to delete %s: note lacks the %q tag (only AI-generated notes may be deleted here)", itemKey, AIGeneratedTag)
+	}
+	if err := c.doDeleteRequest(fmt.Sprintf("/items/%s", itemKey), item.Version); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
 // ListItemsByTag lists items filtered by tag.
 func (c *Client) ListItemsByTag(tag string, limit int) ([]Item, error) {
 	params := url.Values{}
