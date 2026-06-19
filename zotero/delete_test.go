@@ -18,6 +18,7 @@ type methodTransport struct {
 	delStatus int
 	delBody   string
 
+	getCalled     bool
 	deleteCalled  bool
 	deletePath    string
 	deleteVersion string
@@ -30,6 +31,8 @@ func (m *methodTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		m.deletePath = req.URL.Path
 		m.deleteVersion = req.Header.Get("If-Unmodified-Since-Version")
 		status, body = m.delStatus, m.delBody
+	} else {
+		m.getCalled = true
 	}
 	return &http.Response{
 		StatusCode: status,
@@ -126,7 +129,9 @@ func TestDeleteNoteRequiresAIGeneratedTagWhenAsked(t *testing.T) {
 }
 
 // Contract: with requireAIGenerated, an ai-generated note IS deleted — the tag
-// guard permits the caller to remove notes it created.
+// guard permits the caller to remove notes it created — and the DELETE still
+// carries the correct path and version (the tag-guarded path is versioned too,
+// not just the unguarded one).
 func TestDeleteNoteAllowsAIGeneratedNote(t *testing.T) {
 	rt := &methodTransport{
 		getStatus: http.StatusOK,
@@ -139,7 +144,53 @@ func TestDeleteNoteAllowsAIGeneratedNote(t *testing.T) {
 		t.Fatalf("DeleteNote returned error for an ai-generated note: %v", err)
 	}
 	if !rt.deleteCalled {
-		t.Error("expected the ai-generated note to be deleted")
+		t.Fatal("expected the ai-generated note to be deleted")
+	}
+	if rt.deletePath != "/users/12345/items/NOTE5678" {
+		t.Errorf("expected DELETE /users/12345/items/NOTE5678, got %s", rt.deletePath)
+	}
+	if rt.deleteVersion != "5" {
+		t.Errorf("expected If-Unmodified-Since-Version 5, got %q", rt.deleteVersion)
+	}
+}
+
+// Contract: DeleteNoteItem deletes a caller-supplied item WITHOUT re-fetching
+// it — the preview-then-delete callers (CLI/MCP) rely on the shown item and the
+// deleted item being the same single read, so DeleteNoteItem must issue only a
+// DELETE (no GET) and use the item's own version.
+func TestDeleteNoteItemDoesNotRefetch(t *testing.T) {
+	rt := &methodTransport{delStatus: http.StatusNoContent}
+	client := newMethodClient(rt)
+	item := &Item{
+		Key:     "NOTE5678",
+		Version: 11,
+		Data:    ItemData{ItemType: "note", Tags: []Tag{{Tag: AIGeneratedTag}}},
+	}
+
+	if err := client.DeleteNoteItem(item, true); err != nil {
+		t.Fatalf("DeleteNoteItem returned error: %v", err)
+	}
+	if rt.getCalled {
+		t.Error("DeleteNoteItem issued a GET; it must delete the supplied item without re-fetching")
+	}
+	if !rt.deleteCalled || rt.deleteVersion != "11" {
+		t.Errorf("expected a versioned DELETE (version 11), got called=%v version=%q", rt.deleteCalled, rt.deleteVersion)
+	}
+}
+
+// Contract: (guardrail) DeleteNoteItem refuses a non-note item supplied
+// directly, without issuing any DELETE — the structural guard does not depend
+// on the key-based DeleteNote wrapper having fetched the item.
+func TestDeleteNoteItemRefusesNonNote(t *testing.T) {
+	rt := &methodTransport{delStatus: http.StatusNoContent}
+	client := newMethodClient(rt)
+	item := &Item{Key: "PAPER001", Version: 3, Data: ItemData{ItemType: "preprint"}}
+
+	if err := client.DeleteNoteItem(item, false); err == nil {
+		t.Fatal("expected error deleting a non-note item, got nil")
+	}
+	if rt.deleteCalled {
+		t.Error("a DELETE was sent for a non-note item; the guard must block it")
 	}
 }
 

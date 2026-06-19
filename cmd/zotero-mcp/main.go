@@ -243,9 +243,15 @@ func addNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[addNoteInput, any]
 // deleteNoteHandler deletes one AI-generated note. The two-step confirm is the
 // guardrail the LLM sees: a first call previews (so the model and the human in
 // the loop can see exactly which note is targeted), and only an explicit
-// confirm=true second call performs the deletion. The structural guards
-// (notes-only, ai-generated-tag-only, lost-update-safe) are enforced inside
-// zotero.DeleteNote so they hold even if this handler is wrong.
+// confirm=true second call performs the deletion.
+//
+// The note is fetched once: that single read drives the preview, the
+// courtesy pre-checks below, AND the deletion (via DeleteNoteItem), so the
+// item shown and the item deleted cannot diverge across a second round-trip.
+// The pre-checks here exist only to gate the preview and return clear errors;
+// the authoritative structural guards (notes-only, ai-generated-tag-only,
+// lost-update-safe) live in zotero.DeleteNoteItem and run again on the same
+// item, so they hold even if this handler is wrong.
 func deleteNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[deleteNoteInput, any] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input deleteNoteInput) (*mcp.CallToolResult, any, error) {
 		if err := zotero.ValidateItemKey(input.ItemKey); err != nil {
@@ -256,6 +262,7 @@ func deleteNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[deleteNoteInput
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to fetch %s: %w", input.ItemKey, err)
 		}
+		// courtesy pre-checks (also enforced inside DeleteNoteItem)
 		if item.Data.ItemType != "note" {
 			return nil, nil, fmt.Errorf("refusing to delete %s: item type is %q, not \"note\"", input.ItemKey, item.Data.ItemType)
 		}
@@ -268,7 +275,7 @@ func deleteNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[deleteNoteInput
 				item.Key, item.Data.ParentItem, zotero.FormatTags(item.Data.Tags))), nil, nil
 		}
 
-		if _, err := client.DeleteNote(input.ItemKey, true); err != nil {
+		if err := client.DeleteNoteItem(item, true); err != nil {
 			return nil, nil, fmt.Errorf("failed to delete note: %w", err)
 		}
 		return textResult(fmt.Sprintf("Note deleted: %s", input.ItemKey)), nil, nil

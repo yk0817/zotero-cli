@@ -714,11 +714,10 @@ func main() {
 						"confirmationRequired": "re-run with --yes to delete",
 					})
 				}
-				deleted, err := client.DeleteNote(args[0], false)
-				if err != nil {
+				if err := client.DeleteNoteItem(item, false); err != nil {
 					return err
 				}
-				return printJSON(map[string]any{"deleted": true, "noteKey": deleted.Key})
+				return printJSON(map[string]any{"deleted": true, "noteKey": item.Key})
 			}
 
 			// Text mode: show the note, then require approval.
@@ -733,11 +732,10 @@ func main() {
 				}
 			}
 
-			deleted, err := client.DeleteNote(args[0], false)
-			if err != nil {
+			if err := client.DeleteNoteItem(item, false); err != nil {
 				return err
 			}
-			fmt.Printf("Note deleted: %s\n", deleted.Key)
+			fmt.Printf("Note deleted: %s\n", item.Key)
 			return nil
 		},
 	}
