@@ -82,7 +82,7 @@ func TestDeleteNoteSendsVersionedDelete(t *testing.T) {
 	}
 }
 
-// Contract (guardrail): a key that resolves to a non-note item is refused and
+// Contract: (guardrail) a key that resolves to a non-note item is refused and
 // NO delete request is sent — a mistyped key must never destroy a paper or
 // attachment.
 func TestDeleteNoteRefusesNonNote(t *testing.T) {
@@ -105,7 +105,7 @@ func TestDeleteNoteRefusesNonNote(t *testing.T) {
 	}
 }
 
-// Contract (guardrail): with requireAIGenerated, a note lacking the
+// Contract: (guardrail) with requireAIGenerated, a note lacking the
 // ai-generated tag is refused and not deleted — autonomous callers must not be
 // able to remove human-written notes.
 func TestDeleteNoteRequiresAIGeneratedTagWhenAsked(t *testing.T) {
