@@ -30,6 +30,34 @@ Credentials are stored in `~/.config/zotero-cli/config.json` with `0600` permiss
 
 ## CLI Usage
 
+### All Commands
+
+The table below is generated from `zotero-cli schema` and kept in sync by
+`scripts/gen-readme.sh` (run automatically before `git push`; see
+[Keeping the README in sync](#keeping-the-readme-in-sync)). 日本語: 下の表は
+`zotero-cli schema` から自動生成されます。手で編集しても次回の生成で上書きされます。
+
+<!-- BEGIN AUTO-GENERATED COMMANDS (scripts/gen-readme.sh — do not edit by hand) -->
+
+| Command | Description | Arguments |
+|---------|-------------|-----------|
+| `add-note` | Add a note to an item | parentItemKey: 8-character alphanumeric item key of parent item (required) |
+| `annotations` | Show annotations (highlights/comments) of an item | itemKey: 8-character alphanumeric item key (required) |
+| `bibtex` | Export as BibTeX | query: search keyword (optional, requires --all or --collection if omitted) |
+| `collections` | List collections | none |
+| `config` | Set up API key and user ID | none (interactive prompt) |
+| `context` | Show all information about an item | itemKey: 8-character alphanumeric item key (required) |
+| `delete-note` | Delete a single note (guardrailed: notes only, one key, approval required) | itemKey: 8-character alphanumeric key of the note to delete (required) |
+| `export` | Batch export for literature review | none |
+| `fullsearch` | Full-text search | query: search keyword (required) |
+| `fulltext` | Show full text of an item | itemKey: 8-character alphanumeric item key (required) |
+| `get` | Show item details | itemKey: 8-character alphanumeric item key (required) |
+| `list` | List items | none |
+| `search` | Search items by keyword | query: search keyword (required) |
+| `upload` | Upload a file as an attachment | filePath: path to the file to upload (required) |
+
+<!-- END AUTO-GENERATED COMMANDS -->
+
 ### Global Options
 
 ```bash
@@ -360,6 +388,31 @@ zotero-cli/
 │   └── discuss-en.md    # Close-reading discussion (English)
 └── go.mod
 ```
+
+## Keeping the README in sync
+
+The [command table](#all-commands) is generated from `zotero-cli schema` — the
+single source of truth — so it never drifts from the code. Do not hand-edit the
+block between the `<!-- BEGIN AUTO-GENERATED COMMANDS -->` markers; change the
+command definitions in `cmd/zotero-cli/` and regenerate instead.
+
+```bash
+bash scripts/gen-readme.sh           # rewrite the table in place
+bash scripts/gen-readme.sh --check   # CI/pre-push: exit 1 + diff if stale (no write)
+```
+
+Three layers keep it honest:
+
+- **Pre-push hook** (`scripts/hook-readme-sync.sh`, wired in `.claude/settings.json`)
+  — before a `git push`, regenerates the table; if it was stale it updates
+  `README.md` and blocks the push so you review and commit the change.
+- **CI** runs `gen-readme.sh --check`, so a stale README fails the build even if
+  the push happened without the hook.
+- **`/sync-readme`** — a Claude Code slash command for an on-demand regenerate.
+
+日本語: コマンド表は `zotero-cli schema` から自動生成される。マーカー間は手で
+編集せず、`cmd/zotero-cli/` の定義を直して再生成する。push 前フック・CI・手動
+コマンドの3層でズレを防ぐ。
 
 ## License
 
