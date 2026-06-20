@@ -35,3 +35,11 @@ jobs:
 
       - name: Test contract check (all tracked test files)
         run: bash scripts/hook-validate-test-contract.sh --check-all
+
+      - name: README generator regression tests
+        run: |
+          bash scripts/tests/test-gen-readme.sh
+          bash scripts/tests/test-hook-readme-sync.sh
+
+      - name: README sync check (regenerated from schema)
+        run: bash scripts/gen-readme.sh --check
