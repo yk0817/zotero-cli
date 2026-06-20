@@ -427,42 +427,54 @@ func (c *Client) doDeleteRequest(endpoint string, version int) error {
 	return nil
 }
 
-// DeleteNote deletes a single note item, guarded so it can only ever remove
-// one note that the caller has positively identified.
+// DeleteNoteItem deletes an already-fetched note, guarded so it can only ever
+// remove one note the caller has positively identified. It is the single
+// source of truth for the delete guards — callers that already hold the item
+// (to show a preview) should use this so the item shown and the item deleted
+// are one and the same read, and the guards are not duplicated across a second
+// network round-trip.
 //
 // The design deliberately makes the *dangerous* directions impossible rather
 // than relying on the caller to be careful:
 //
-//   - Notes only. We re-read the item and refuse anything whose itemType is
-//     not "note". A mistyped or stale key therefore cannot delete a paper, a
-//     PDF attachment, or a highlight — only a note, the cheapest thing to
-//     recreate. This is a structural guard, not a warning the caller can skip.
-//   - One key, no bulk. The API surface takes exactly one itemKey and has no
+//   - Notes only. Anything whose itemType is not "note" is refused. A mistyped
+//     or stale key therefore cannot delete a paper, a PDF attachment, or a
+//     highlight — only a note, the cheapest thing to recreate. This is a
+//     structural guard, not a warning the caller can skip.
+//   - One key, no bulk. The API surface takes exactly one item and has no
 //     "delete by tag / by query / all" path. There is intentionally no way to
 //     express "delete every ai-summary note" here; mass deletion would have to
-//     be built explicitly by a caller looping over keys it has already listed
+//     be built explicitly by a caller looping over items it has already listed
 //     and shown, which keeps the blast radius of any single call at one item.
 //   - Caller-created only (opt-in). When requireAIGenerated is true the note
 //     must also carry AIGeneratedTag, so an autonomous caller (the MCP server)
 //     can delete notes it produced but never a human's hand-written note. The
 //     CLI passes false because a human has already confirmed the specific key.
-//   - Lost-update safe. Deletion uses the version from the read above via
-//     If-Unmodified-Since-Version (see doDeleteRequest).
-//
-// On success it returns the deleted note's metadata so the caller can echo
-// exactly what was removed.
+//   - Lost-update safe. Deletion uses item.Version via If-Unmodified-Since-
+//     Version (see doDeleteRequest), so a note edited since it was read is
+//     rejected rather than clobbered. Callers should pass an item read shortly
+//     before deletion for this to be meaningful.
+func (c *Client) DeleteNoteItem(item *Item, requireAIGenerated bool) error {
+	if item.Data.ItemType != "note" {
+		return fmt.Errorf("refusing to delete %s: item type is %q, not \"note\" (this operation only deletes notes)", item.Key, item.Data.ItemType)
+	}
+	if requireAIGenerated && !item.HasTag(AIGeneratedTag) {
+		return fmt.Errorf("refusing to delete %s: note lacks the %q tag (only AI-generated notes may be deleted here)", item.Key, AIGeneratedTag)
+	}
+	return c.doDeleteRequest(fmt.Sprintf("/items/%s", item.Key), item.Version)
+}
+
+// DeleteNote fetches a note by key and deletes it via DeleteNoteItem. Use it
+// when you do not already hold the item; callers that have just read the item
+// (e.g. to show a preview) should call DeleteNoteItem directly to avoid a
+// redundant read. On success it returns the deleted note's metadata so the
+// caller can echo exactly what was removed.
 func (c *Client) DeleteNote(itemKey string, requireAIGenerated bool) (*Item, error) {
 	item, err := c.GetItem(itemKey)
 	if err != nil {
 		return nil, err
 	}
-	if item.Data.ItemType != "note" {
-		return nil, fmt.Errorf("refusing to delete %s: item type is %q, not \"note\" (this operation only deletes notes)", itemKey, item.Data.ItemType)
-	}
-	if requireAIGenerated && !item.HasTag(AIGeneratedTag) {
-		return nil, fmt.Errorf("refusing to delete %s: note lacks the %q tag (only AI-generated notes may be deleted here)", itemKey, AIGeneratedTag)
-	}
-	if err := c.doDeleteRequest(fmt.Sprintf("/items/%s", itemKey), item.Version); err != nil {
+	if err := c.DeleteNoteItem(item, requireAIGenerated); err != nil {
 		return nil, err
 	}
 	return item, nil
