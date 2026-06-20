@@ -44,5 +44,17 @@ grep -q 'git status' "$TMP_ROOT/stdout.txt"; assert "passes input JSON through o
 run_hook "echo pushing to remote"
 [ "$?" -eq 0 ]; assert "the word 'push' alone is not treated as a git push" "$?"
 
+# --- ケース4: 実際の `git push <args>` は generator 経路に到達する（positive path）。
+#   env override を子の bash "$GEN" が継承するので hermetic に保てる。同期済みの
+#   一時 README なら push は許可（exit 0）になる。 ---
+RDM="$TMP_ROOT/README.md"
+printf '[{"name":"alpha","description":"A","args":"x"}]' > "$TMP_ROOT/s.json"
+printf '# T\n\n<!-- BEGIN AUTO-GENERATED COMMANDS (x) -->\n<!-- END AUTO-GENERATED COMMANDS -->\n\ntail\n' > "$RDM"
+# まず同期させてから push を流す
+GEN_README_TARGET="$RDM" GEN_README_SCHEMA_FILE="$TMP_ROOT/s.json" bash "$SCRIPT_DIR/../gen-readme.sh" > /dev/null 2>&1
+jq -n --arg cmd "git push origin main" '{tool_input: {command: $cmd}}' \
+  | GEN_README_TARGET="$RDM" GEN_README_SCHEMA_FILE="$TMP_ROOT/s.json" bash "$HOOK" > /dev/null 2>&1
+[ "$?" -eq 0 ]; assert "real 'git push' with in-sync README is allowed (exit 0)" "$?"
+
 echo "hook-readme-sync routing tests: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
