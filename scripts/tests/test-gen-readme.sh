@@ -93,7 +93,23 @@ printf '# No markers here\n\njust text\n' > "$NOMARK"
 err="$(GEN_README_TARGET="$NOMARK" GEN_README_SCHEMA_FILE="$TMP_ROOT/schemaA.json" bash "$GEN" 2>&1)"
 code=$?
 [ "$code" -eq 1 ]; assert "missing markers fails (exit 1)" "$?"
-printf '%s' "$err" | grep -q 'marker not found'; assert "missing markers explains why" "$?"
+printf '%s' "$err" | grep -q 'expected exactly 1 BEGIN marker'; assert "missing markers explains why" "$?"
+
+# --- ケース6: マーカーが重複した README はエラー（二重挿入を防ぐ）---
+DUP="$TMP_ROOT/dup.md"
+cat > "$DUP" <<'EOF'
+# Dup
+
+<!-- BEGIN AUTO-GENERATED COMMANDS (a) -->
+<!-- END AUTO-GENERATED COMMANDS -->
+
+<!-- BEGIN AUTO-GENERATED COMMANDS (b) -->
+<!-- END AUTO-GENERATED COMMANDS -->
+EOF
+err="$(GEN_README_TARGET="$DUP" GEN_README_SCHEMA_FILE="$TMP_ROOT/schemaA.json" bash "$GEN" 2>&1)"
+code=$?
+[ "$code" -eq 1 ]; assert "duplicate markers fail (exit 1)" "$?"
+printf '%s' "$err" | grep -q 'found 2'; assert "duplicate markers report the count" "$?"
 
 echo "gen-readme tests: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
