@@ -985,11 +985,139 @@ func main() {
 	uploadCmd.Flags().BoolVar(&uploadDryRun, "dry-run", false, "Show payload without making API call")
 	uploadCmd.Flags().StringVar(&uploadTitle, "title", "", "Attachment title (defaults to filename)")
 
+	// tags command
+	tagsCmd := &cobra.Command{
+		Use:   "tags",
+		Short: "List all tags in the library (closed vocabulary source)",
+		Annotations: map[string]string{
+			"args": "none",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+			tags, err := client.ListTags()
+			if err != nil {
+				return err
+			}
+			if isJSON() {
+				if tags == nil {
+					tags = []zotero.LibraryTag{}
+				}
+				return printJSON(tags)
+			}
+			if len(tags) == 0 {
+				fmt.Println("No tags found")
+				return nil
+			}
+			printTagTable(tags)
+			return nil
+		},
+	}
+
+	// tag command
+	//
+	// Edits an item's own tag set. The CLI deliberately does NOT enforce a
+	// closed vocabulary — it adds/removes exactly the tags it is given. The
+	// vocabulary constraint (only reuse existing tags, never invent new ones)
+	// lives in the `tag` skill, which fetches the existing tag list first and
+	// chooses from it; the separate `tag-new` skill is the only place that
+	// intentionally introduces a new tag. Keeping the constraint in the skill
+	// layer leaves the CLI a clean primitive usable from either path.
+	var tagAdd []string
+	var tagRemove []string
+	var tagDryRun bool
+	tagCmd := &cobra.Command{
+		Use:   "tag <itemKey>",
+		Short: "Add or remove tags on an item",
+		Args:  cobra.ExactArgs(1),
+		Annotations: map[string]string{
+			"args": "itemKey: 8-character alphanumeric item key (required)",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateItemKey(args[0]); err != nil {
+				return err
+			}
+			if len(tagAdd) == 0 && len(tagRemove) == 0 {
+				return &CLIError{
+					Code:       ErrCodeInvalidArgument,
+					Message:    "no tag changes specified",
+					Suggestion: "Specify at least one --add or --remove",
+				}
+			}
+			if err := validateTags(tagAdd); err != nil {
+				return err
+			}
+			if err := validateTags(tagRemove); err != nil {
+				return err
+			}
+
+			client, err := newClient()
+			if err != nil {
+				return err
+			}
+
+			// A read is needed even for --dry-run, because the resulting tag
+			// set is the current tags with the deltas applied. The read is
+			// idempotent; --dry-run only guarantees no *write* is performed.
+			item, err := client.GetItem(args[0])
+			if err != nil {
+				return err
+			}
+
+			resultTags := tagStrings(zotero.ApplyTagDelta(item.Data.Tags, tagAdd, tagRemove))
+
+			if tagDryRun {
+				if isJSON() {
+					return printJSON(map[string]any{
+						"dryRun": true,
+						"payload": map[string]any{
+							"itemKey":    args[0],
+							"add":        tagAdd,
+							"remove":     tagRemove,
+							"resultTags": resultTags,
+						},
+					})
+				}
+				fmt.Println("=== DRY RUN (no API call will be made) ===")
+				fmt.Printf("Item:        %s\n", args[0])
+				if len(tagAdd) > 0 {
+					fmt.Printf("Add:         %s\n", strings.Join(tagAdd, ", "))
+				}
+				if len(tagRemove) > 0 {
+					fmt.Printf("Remove:      %s\n", strings.Join(tagRemove, ", "))
+				}
+				fmt.Printf("Result tags: %s\n", strings.Join(resultTags, ", "))
+				return nil
+			}
+
+			updated, err := client.UpdateItemTags(item, tagAdd, tagRemove)
+			if err != nil {
+				return err
+			}
+			finalTags := tagStrings(updated)
+			if isJSON() {
+				return printJSON(map[string]any{
+					"itemKey": args[0],
+					"tags":    finalTags,
+				})
+			}
+			fmt.Printf("Tags updated: %s\n", args[0])
+			fmt.Printf("Tags: %s\n", strings.Join(finalTags, ", "))
+			return nil
+		},
+	}
+	tagCmd.Flags().StringArrayVar(&tagAdd, "add", nil, "Tag to add (repeatable)")
+	tagCmd.Flags().StringArrayVar(&tagRemove, "remove", nil, "Tag to remove (repeatable)")
+	tagCmd.Flags().BoolVar(&tagDryRun, "dry-run", false, "Show resulting tags without making API call")
+
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
-		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd, schemaCmd)
+		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
+		tagsCmd, tagCmd, schemaCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		cliErr := classifyError(err)
@@ -1053,6 +1181,37 @@ func tagStrings(tags []zotero.Tag) []string {
 		out = append(out, t.Tag)
 	}
 	return out
+}
+
+// validateTags rejects empty/whitespace-only tags and tags containing control
+// characters or path-traversal sequences, matching the VALIDATION policy used
+// for other user input. Tag values are written verbatim to the library, so a
+// blank or control-laden tag would pollute the vocabulary.
+func validateTags(tags []string) error {
+	for _, t := range tags {
+		if strings.TrimSpace(t) == "" {
+			return &CLIError{
+				Code:       ErrCodeValidation,
+				Message:    "tag is empty",
+				Suggestion: "Provide a non-empty tag value",
+			}
+		}
+		if err := sanitizeInput(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printTagTable renders the library tag list with each tag's usage count.
+func printTagTable(tags []zotero.LibraryTag) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TAG\tITEMS")
+	fmt.Fprintln(w, "---\t-----")
+	for _, t := range tags {
+		fmt.Fprintf(w, "%s\t%d\n", t.Tag, t.Meta.NumItems)
+	}
+	w.Flush()
 }
 
 // printNotePreview shows what a delete-note would remove: the key, its parent,

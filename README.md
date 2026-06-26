@@ -54,6 +54,8 @@ The table below is generated from `zotero-cli schema` and kept in sync by
 | `get` | Show item details | itemKey: 8-character alphanumeric item key (required) |
 | `list` | List items | none |
 | `search` | Search items by keyword | query: search keyword (required) |
+| `tag` | Add or remove tags on an item | itemKey: 8-character alphanumeric item key (required) |
+| `tags` | List all tags in the library (closed vocabulary source) | none |
 | `upload` | Upload a file as an attachment | filePath: path to the file to upload (required) |
 
 <!-- END AUTO-GENERATED COMMANDS -->
@@ -343,11 +345,36 @@ Discuss a paper interactively around your own Zotero highlights and comments (fe
 /discuss FQVL7ZHM --color "#ff0000"      # Focus on red highlights only
 ```
 
+### `/tag` (`/tag-en`) — Closed-Vocabulary Tagging
+
+Tag a paper using **only tags that already exist** in the library. The skill reads the paper, fetches the existing tag list (`zotero-cli tags`), and picks solely from that set — it never invents a new tag. Concepts with no matching existing tag are reported as candidates only, not applied. This keeps the library's tag vocabulary from sprawling.
+
+```bash
+/tag FQVL7ZHM                 # Suggest & apply existing tags (max 5 by default)
+/tag FQVL7ZHM --dry-run        # Preview which existing tags would be applied
+/tag FQVL7ZHM --max 3          # Cap the number of tags applied
+/tag "graph attention network"  # Search → select → tag
+```
+
+### `/tag-new` (`/tag-new-en`) — Create a New Tag
+
+The **only** entry point that intentionally extends the vocabulary. It checks for exact and near-duplicate existing tags first (warns and suggests `/tag` if one already covers it), then applies the new tag.
+
+```bash
+/tag-new FQVL7ZHM --tag "dynamic-knowledge-graph"   # Create & apply a new tag
+/tag-new FQVL7ZHM --tag "DKG" --tag "temporal-gnn"   # Multiple new tags
+```
+
+Underlying CLI primitives: `zotero-cli tags` (list existing tags) and `zotero-cli tag <key> --add/--remove [--dry-run]` (edit an item's tags). The CLI itself is an unconstrained primitive; the closed-vocabulary rule lives in the `/tag` skill.
+
 ### Common Options
 
 | Option | Description | Available in |
 |--------|-------------|--------------|
 | `--save` | Save output as a Zotero note | All skills except `/discuss` |
+| `--dry-run` | Preview tag changes without writing | `/tag` |
+| `--max <n>` | Cap how many tags are applied | `/tag` |
+| `--tag <new>` | New tag to create and apply (repeatable) | `/tag-new` |
 | `--color <hex>` | Focus on annotations of a specific color | `/discuss` |
 | `--focus <aspect>` | Focus comparison on a specific aspect | `/compare` |
 | `--perspective <text>` | Focus analysis on a specific viewpoint | `/critique` |
