@@ -282,7 +282,7 @@ This project includes [Claude Code](https://claude.com/claude-code) custom skill
 
 All skills are available as slash commands when running Claude Code in the `zotero-cli` directory. Each skill has both Japanese (`/skill`) and English (`/skill-en`) versions.
 
-### `/summarize` — Paper Summarization
+### `/summarize` (`/summarize-en`) — Paper Summarization
 
 ```bash
 /summarize FQVL7ZHM                                # Ochiai-style 6-point summary (default)
@@ -343,6 +343,26 @@ Discuss a paper interactively around your own Zotero highlights and comments (fe
 /discuss FQVL7ZHM --color "#ff0000"      # Focus on red highlights only
 ```
 
+### `/extract-methods` (`/extract-methods-en`) — Reproducibility Method Extraction
+
+Extract reproducibility-focused details (experimental setup, datasets, metrics, hyperparameters, baselines) from a paper's full text into a structured table. Distinct from `/summarize`: it captures only the facts needed to reproduce the work, marking anything unstated as unknown rather than guessing.
+
+```bash
+/extract-methods FQVL7ZHM                 # Method table from the paper's full text
+/extract-methods FQVL7ZHM --save           # Extract and save as a Zotero note
+/extract-methods "graph attention network"  # Search → select → extract
+```
+
+### `/gap` (`/gap-en`) — Research Gap Analysis
+
+Identify open research gaps and candidate research questions across a set of papers (collection, tag, or specified item keys). Distinct from `/survey-table` (organizes) and `/related-work` (drafts prose): it asks "what should be investigated next?".
+
+```bash
+/gap --tag "GNN"                                   # Gaps across a tag
+/gap --collection ZVUDP75D --save                   # Collection → gaps + RQs → save
+/gap --keys "FQVL7ZHM,99NU4NKK,EUL3QYDP"             # Specified papers
+```
+
 ### Common Options
 
 | Option | Description | Available in |
@@ -352,9 +372,9 @@ Discuss a paper interactively around your own Zotero highlights and comments (fe
 | `--focus <aspect>` | Focus comparison on a specific aspect | `/compare` |
 | `--perspective <text>` | Focus analysis on a specific viewpoint | `/critique` |
 | `--columns "<cols>"` | Custom table columns | `/survey-table` |
-| `--tag <tag>` | Filter by Zotero tag | `/survey-table`, `/related-work` |
-| `--collection <key>` | Filter by collection | `/survey-table`, `/related-work` |
-| `--keys "<k1>,<k2>"` | Specify papers by itemKey | `/survey-table`, `/related-work` |
+| `--tag <tag>` | Filter by Zotero tag | `/survey-table`, `/related-work`, `/gap` |
+| `--collection <key>` | Filter by collection | `/survey-table`, `/related-work`, `/gap` |
+| `--keys "<k1>,<k2>"` | Specify papers by itemKey | `/survey-table`, `/related-work`, `/gap` |
 | `--theme <text>` | Specify theme context | `/related-work` |
 | `--lang <ja\|en>` | Output language | `/related-work` |
 
