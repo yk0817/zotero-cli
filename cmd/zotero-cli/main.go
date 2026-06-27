@@ -985,11 +985,15 @@ func main() {
 	uploadCmd.Flags().BoolVar(&uploadDryRun, "dry-run", false, "Show payload without making API call")
 	uploadCmd.Flags().StringVar(&uploadTitle, "title", "", "Attachment title (defaults to filename)")
 
+	// citations command
+	citationsCmd := newCitationsCmd()
+
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
-		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd, schemaCmd)
+		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
+		citationsCmd, schemaCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		cliErr := classifyError(err)
