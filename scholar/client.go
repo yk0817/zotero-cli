@@ -149,9 +149,21 @@ func (c *Client) ResolvePaperID(ctx context.Context, doi, arxivID, title string)
 	return "", ErrPaperNotFound
 }
 
+// identifierNotResolved reports whether status means the identifier was bad or
+// unknown — not a transport fault or server error. 400 (malformed), 404
+// (unknown), and 422 (unprocessable/unregistered DOI) all mean "this
+// identifier did not resolve"; auth (401/403), rate-limit (429), and all 5xx
+// are hard errors that must abort the resolution chain.
+func identifierNotResolved(status int) bool {
+	return status == http.StatusBadRequest ||
+		status == http.StatusNotFound ||
+		status == http.StatusUnprocessableEntity
+}
+
 // lookupPaperID resolves a single prefixed id (e.g. "DOI:..."/"ARXIV:...") to a
-// canonical paperId. A 404 means "no such paper" (found=false, no error); any
-// other non-200 is a propagated error.
+// canonical paperId. 400, 404, and 422 all mean "no such paper" (found=false,
+// no error) so resolution falls through to the next candidate; any other
+// non-200 is a propagated error.
 func (c *Client) lookupPaperID(ctx context.Context, id string) (string, bool, error) {
 	params := url.Values{}
 	params.Set("fields", "paperId")
@@ -159,7 +171,7 @@ func (c *Client) lookupPaperID(ctx context.Context, id string) (string, bool, er
 	if err != nil {
 		return "", false, err
 	}
-	if status == http.StatusNotFound {
+	if identifierNotResolved(status) {
 		return "", false, nil
 	}
 	if status != http.StatusOK {
