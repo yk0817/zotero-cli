@@ -394,8 +394,13 @@ func (c *Client) paged(ctx context.Context, id, endpoint, field string, limit in
 	return out, nil
 }
 
+// maxErrorBodyLen caps the body snippet in error messages. Large outage pages
+// (multi-KB HTML) from Semantic Scholar would otherwise flood LLM-agent token
+// budgets and pollute logs; the status code already identifies the failure.
+const maxErrorBodyLen = 200
+
 // apiError formats a non-2xx response, including the status code so callers and
 // tests can assert on it.
 func apiError(status int, body []byte) error {
-	return fmt.Errorf("Semantic Scholar API error (HTTP %d): %s", status, string(body))
+	return fmt.Errorf("Semantic Scholar API error (HTTP %d): %.*s", status, maxErrorBodyLen, body)
 }
