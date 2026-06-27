@@ -67,7 +67,9 @@ func newStubClient(routes map[string][]stubResponse) (*Client, *scholarStub) {
 func ok(body string) []stubResponse { return []stubResponse{{status: http.StatusOK, body: body}} }
 func notFound() []stubResponse      { return []stubResponse{{status: http.StatusNotFound, body: `{}`}} }
 func paperID(id string) string      { return fmt.Sprintf(`{"paperId":%q}`, id) }
-func searchHit(id string) string    { return fmt.Sprintf(`{"data":[{"paperId":%q,"title":"X"}]}`, id) }
+func searchHit(id string) string {
+	return fmt.Sprintf(`{"data":[{"paperId":%q,"title":"Attention Is All You Need"}]}`, id)
+}
 
 // Contract: a DOI resolves to a canonical paperId via the /paper/DOI:<doi>
 // lookup. This fixes the resolution path the CLI relies on for the common case
