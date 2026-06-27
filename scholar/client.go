@@ -95,6 +95,13 @@ type PaperRef struct {
 // here (the caller decides whether, e.g., a 404 is "not found" or fatal); only
 // transport/read failures produce err.
 func (c *Client) get(ctx context.Context, path string) (body []byte, status int, err error) {
+	// An already-cancelled context (e.g. Ctrl-C delivered before this request)
+	// must abort before any network work rather than waiting on the transport.
+	// The real http.Transport honours context mid-flight, but this guard makes
+	// the fast-fail deterministic and independent of the transport.
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, 0, err

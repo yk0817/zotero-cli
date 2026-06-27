@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -85,7 +84,7 @@ func newCitationsCmd() *cobra.Command {
 			}
 
 			sc := scholar.NewClient()
-			ctx := context.Background()
+			ctx := cmd.Context()
 			paperID, err := sc.ResolvePaperID(ctx, item.Data.DOI, extractArxivID(item.Data), item.Data.Title)
 			if err != nil {
 				if errors.Is(err, scholar.ErrPaperNotFound) {
