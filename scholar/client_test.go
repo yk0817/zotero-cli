@@ -235,6 +235,39 @@ func TestCitationsSkipsNullPapers(t *testing.T) {
 	}
 }
 
+// Contract: a page whose rows are all null papers (none in the S2 graph) stops
+// the walk instead of advancing the cursor. Without this guard a paper whose
+// neighbours are entirely unindexed (common for classic/journal papers) keeps
+// fetching pages that add nothing — up to ~limit/pageSize requests, each able to
+// block for the full requestTimeout — so the CLI appears frozen. The walk must
+// terminate at the first page that yields no usable row.
+func TestReferencesStopsWhenPageAllNull(t *testing.T) {
+	allNull := `{"next":25,"data":[{"citedPaper":null},{"citedPaper":null}]}`
+	// A second page exists only as a safety net: if the guard regressed and the
+	// walk continued, this terminating page keeps the test from hanging while
+	// still recording the extra (wrong) request.
+	tail := `{"data":[{"citedPaper":null}]}`
+	routes := map[string][]stubResponse{
+		"/graph/v1/paper/PID/references": {
+			{status: http.StatusOK, body: allNull},
+			{status: http.StatusOK, body: tail},
+		},
+	}
+	client, stub := newStubClient(routes)
+
+	refs, err := client.References(context.Background(), "PID", 25)
+
+	if err != nil {
+		t.Fatalf("References returned error: %v", err)
+	}
+	if len(refs) != 0 {
+		t.Fatalf("expected 0 references, got %d", len(refs))
+	}
+	if len(stub.requests) != 1 {
+		t.Errorf("expected the walk to stop at the first all-null page (1 request), got %d", len(stub.requests))
+	}
+}
+
 // Contract: References follows the offset/next cursor instead of trusting one
 // page, so a backward list longer than a page is not silently truncated. The
 // second request must resume at the offset the API's "next" cursor named.

@@ -259,6 +259,7 @@ func (c *Client) paged(ctx context.Context, id, endpoint, field string, limit in
 			return nil, fmt.Errorf("failed to parse Semantic Scholar %s: %w", endpoint, err)
 		}
 
+		before := len(out)
 		for _, row := range resp.Data {
 			raw, ok := row[field]
 			if !ok {
@@ -278,6 +279,13 @@ func (c *Client) paged(ctx context.Context, id, endpoint, field string, limit in
 		}
 
 		if resp.Next == nil || len(resp.Data) == 0 {
+			break
+		}
+		// A non-empty page that yielded no usable row (every neighbour was a
+		// null paper) must end the walk: advancing the cursor would keep fetching
+		// pages of unindexed papers, up to ~limit/pageSize requests each able to
+		// block for requestTimeout, so the CLI looks frozen.
+		if len(out) == before {
 			break
 		}
 		offset = *resp.Next
