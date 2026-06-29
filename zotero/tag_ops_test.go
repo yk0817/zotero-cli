@@ -197,6 +197,58 @@ func TestApplyTagDelta(t *testing.T) {
 	}
 }
 
+// Contract: ApplyTagDelta preserves each kept tag's Type. Zotero marks
+// auto-applied tags with type=1 and manual ones with type=0; a read-modify-write
+// that dropped Type would re-send automatic tags as manual, silently demoting
+// them. New tags introduced via add default to manual (0), which is correct.
+func TestApplyTagDeltaPreservesType(t *testing.T) {
+	current := []Tag{{Tag: "auto", Type: 1}, {Tag: "manual", Type: 0}}
+
+	got := ApplyTagDelta(current, []string{"new"}, nil)
+
+	byName := make(map[string]int, len(got))
+	for _, tg := range got {
+		byName[tg.Tag] = tg.Type
+	}
+	if byName["auto"] != 1 {
+		t.Errorf("automatic tag demoted: got type %d, want 1", byName["auto"])
+	}
+	if byName["manual"] != 0 {
+		t.Errorf("manual tag type changed: got %d, want 0", byName["manual"])
+	}
+	if v, ok := byName["new"]; !ok || v != 0 {
+		t.Errorf("new tag should be manual (type 0), got %d (present=%v)", v, ok)
+	}
+}
+
+// Contract: the PATCH body UpdateItemTags sends keeps the automatic-tag marker
+// (type=1) on the wire. This is the regression guard for the demotion bug: a
+// single `tag --add` must not rewrite an item's existing automatic tags as
+// manual. Asserted by decoding the recorded request body, not the in-memory set.
+func TestUpdateItemTagsPreservesAutomaticTagTypeInBody(t *testing.T) {
+	client, rt := newTagRecordingClient(http.StatusNoContent, "")
+	item := &Item{Key: "ITEM0001", Version: 7, Data: ItemData{Tags: []Tag{{Tag: "auto", Type: 1}}}}
+
+	if _, err := client.UpdateItemTags(item, []string{"new"}, nil); err != nil {
+		t.Fatalf("UpdateItemTags returned error: %v", err)
+	}
+
+	var payload map[string][]Tag
+	if err := json.Unmarshal(rt.lastBody, &payload); err != nil {
+		t.Fatalf("PATCH body is not the expected JSON object: %v", err)
+	}
+	byName := make(map[string]int)
+	for _, tg := range payload["tags"] {
+		byName[tg.Tag] = tg.Type
+	}
+	if byName["auto"] != 1 {
+		t.Errorf("PATCH body demoted automatic tag: got type %d, want 1", byName["auto"])
+	}
+	if v, ok := byName["new"]; !ok || v != 0 {
+		t.Errorf("PATCH body new tag should be manual (type 0), got %d (present=%v)", v, ok)
+	}
+}
+
 // Contract: UpdateItemTags PATCHes /items/<key> with the resulting tag set and
 // echoes the item's version in If-Unmodified-Since-Version, so a concurrent
 // edit is rejected (412) rather than silently clobbering another client's tag

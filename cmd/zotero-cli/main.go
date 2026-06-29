@@ -1066,19 +1066,11 @@ func main() {
 				return err
 			}
 
-			resultTags := tagStrings(zotero.ApplyTagDelta(item.Data.Tags, tagAdd, tagRemove))
+			result := zotero.ApplyTagDelta(item.Data.Tags, tagAdd, tagRemove)
 
 			if tagDryRun {
 				if isJSON() {
-					return printJSON(map[string]any{
-						"dryRun": true,
-						"payload": map[string]any{
-							"itemKey":    args[0],
-							"add":        tagAdd,
-							"remove":     tagRemove,
-							"resultTags": resultTags,
-						},
-					})
+					return printJSON(tagDryRunPayload(args[0], tagAdd, tagRemove, result))
 				}
 				fmt.Println("=== DRY RUN (no API call will be made) ===")
 				fmt.Printf("Item:        %s\n", args[0])
@@ -1088,7 +1080,7 @@ func main() {
 				if len(tagRemove) > 0 {
 					fmt.Printf("Remove:      %s\n", strings.Join(tagRemove, ", "))
 				}
-				fmt.Printf("Result tags: %s\n", strings.Join(resultTags, ", "))
+				fmt.Printf("Result tags: %s\n", strings.Join(tagStrings(result), ", "))
 				return nil
 			}
 
@@ -1096,15 +1088,11 @@ func main() {
 			if err != nil {
 				return err
 			}
-			finalTags := tagStrings(updated)
 			if isJSON() {
-				return printJSON(map[string]any{
-					"itemKey": args[0],
-					"tags":    finalTags,
-				})
+				return printJSON(tagResultPayload(args[0], updated))
 			}
 			fmt.Printf("Tags updated: %s\n", args[0])
-			fmt.Printf("Tags: %s\n", strings.Join(finalTags, ", "))
+			fmt.Printf("Tags: %s\n", strings.Join(tagStrings(updated), ", "))
 			return nil
 		},
 	}
@@ -1174,7 +1162,7 @@ func printItemDetail(item *zotero.Item) {
 	}
 }
 
-// tagStrings extracts plain tag strings for JSON output.
+// tagStrings extracts plain tag strings for human-readable output.
 func tagStrings(tags []zotero.Tag) []string {
 	out := []string{}
 	for _, t := range tags {
@@ -1183,10 +1171,49 @@ func tagStrings(tags []zotero.Tag) []string {
 	return out
 }
 
+// emptyIfNil normalizes a nil slice to a non-nil empty slice so JSON renders it
+// as `[]` rather than `null`, matching the project convention that empty
+// results are `[]` (see CLAUDE.md and the `tags`/`collections` commands).
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// tagDryRunPayload builds the --dry-run JSON payload. add/remove are normalized
+// to non-nil slices (the unspecified side must not serialize as null), and
+// resultTags carries full []zotero.Tag objects so the shape matches the `tags`
+// field of `get`/`context` rather than diverging into a bare string array.
+func tagDryRunPayload(itemKey string, add, remove []string, result []zotero.Tag) map[string]any {
+	return map[string]any{
+		"dryRun": true,
+		"payload": map[string]any{
+			"itemKey":    itemKey,
+			"add":        emptyIfNil(add),
+			"remove":     emptyIfNil(remove),
+			"resultTags": result,
+		},
+	}
+}
+
+// tagResultPayload builds the post-update JSON payload. tags carries full
+// []zotero.Tag objects so consumers can rely on the same `{"tag":...}` shape
+// `get`/`context` emit.
+func tagResultPayload(itemKey string, tags []zotero.Tag) map[string]any {
+	return map[string]any{
+		"itemKey": itemKey,
+		"tags":    tags,
+	}
+}
+
 // validateTags rejects empty/whitespace-only tags and tags containing control
 // characters or path-traversal sequences, matching the VALIDATION policy used
 // for other user input. Tag values are written verbatim to the library, so a
-// blank or control-laden tag would pollute the vocabulary.
+// blank or control-laden tag would pollute the vocabulary. Unlike free text,
+// a tag is a single-line vocabulary term, so the whitespace control characters
+// sanitizeInput tolerates (newline/carriage-return/tab) are also rejected — a
+// tab in particular would break the `tags` table (tabwriter is tab-delimited).
 func validateTags(tags []string) error {
 	for _, t := range tags {
 		if strings.TrimSpace(t) == "" {
@@ -1198,6 +1225,13 @@ func validateTags(tags []string) error {
 		}
 		if err := sanitizeInput(t); err != nil {
 			return err
+		}
+		if strings.ContainsAny(t, "\n\r\t") {
+			return &CLIError{
+				Code:       ErrCodeValidation,
+				Message:    "tag contains a newline or tab",
+				Suggestion: "Tags must be a single line without tabs or newlines",
+			}
 		}
 	}
 	return nil

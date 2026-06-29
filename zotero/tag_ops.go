@@ -68,7 +68,7 @@ func ApplyTagDelta(current []Tag, add, remove []string) []Tag {
 		if removeSet[strings.ToLower(t.Tag)] {
 			continue
 		}
-		result = append(result, Tag{Tag: t.Tag})
+		result = append(result, Tag{Tag: t.Tag, Type: t.Type})
 		present[strings.ToLower(t.Tag)] = true
 	}
 
