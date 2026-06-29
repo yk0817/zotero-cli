@@ -60,9 +60,13 @@ type Creator struct {
 	Name        string `json:"name"`
 }
 
-// Tag represents a Zotero tag.
+// Tag represents a Zotero tag. Type distinguishes a manually-added tag (0, the
+// default) from an automatically-applied one (1). It must be preserved on a
+// read-modify-write of an item's tag set: dropping it would make a PATCH
+// silently re-send automatic tags as manual (type 0), demoting them.
 type Tag struct {
-	Tag string `json:"tag"`
+	Tag  string `json:"tag"`
+	Type int    `json:"type,omitempty"`
 }
 
 // Collection represents a Zotero collection.
