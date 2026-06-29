@@ -44,6 +44,7 @@ The table below is generated from `zotero-cli schema` and kept in sync by
 | `add-note` | Add a note to an item | parentItemKey: 8-character alphanumeric item key of parent item (required) |
 | `annotations` | Show annotations (highlights/comments) of an item | itemKey: 8-character alphanumeric item key (required) |
 | `bibtex` | Export as BibTeX | query: search keyword (optional, requires --all or --collection if omitted) |
+| `citations` | List a paper's references and citations via Semantic Scholar | itemKey: 8-character alphanumeric item key (required) |
 | `collections` | List collections | none |
 | `config` | Set up API key and user ID | none (interactive prompt) |
 | `context` | Show all information about an item | itemKey: 8-character alphanumeric item key (required) |
@@ -366,6 +367,20 @@ The **only** entry point that intentionally extends the vocabulary. It checks fo
 ```
 
 Underlying CLI primitives: `zotero-cli tags` (list existing tags) and `zotero-cli tag <key> --add/--remove [--dry-run]` (edit an item's tags). The CLI itself is an unconstrained primitive; the closed-vocabulary rule lives in the `/tag` skill.
+
+### `/citations` (`/citations-en`) — Citation Network
+
+Map a paper's citation network via [Semantic Scholar](https://www.semanticscholar.org/product/api): the **references** it cites (backward) and the **papers citing it** (forward), each with a one-line summary in an overview table. Useful for tracing a paper's intellectual roots and its downstream impact. No API key required (set `SEMANTIC_SCHOLAR_API_KEY` for higher rate limits). If the paper has no DOI/arXiv ID and the title is not found, identification may fail — that means missing metadata, not a bug.
+
+```bash
+/citations FQVL7ZHM                          # Both directions (default)
+/citations FQVL7ZHM --direction forward        # Only papers citing this one
+/citations FQVL7ZHM --direction backward --limit 40  # Only references it cites
+/citations FQVL7ZHM --save                      # Map and save as a Zotero note
+/citations "attention is all you need"          # Search → select → map
+```
+
+Underlying CLI primitive: `zotero-cli citations <key> --direction backward|forward|both --limit N`.
 
 ### `/extract-methods` (`/extract-methods-en`) — Reproducibility Method Extraction
 

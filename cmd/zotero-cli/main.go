@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -9,9 +10,11 @@ import (
 	"io"
 	"mime"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -1100,14 +1103,19 @@ func main() {
 	tagCmd.Flags().StringArrayVar(&tagRemove, "remove", nil, "Tag to remove (repeatable)")
 	tagCmd.Flags().BoolVar(&tagDryRun, "dry-run", false, "Show resulting tags without making API call")
 
+	// citations command
+	citationsCmd := newCitationsCmd()
+
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
 		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
-		tagsCmd, tagCmd, schemaCmd)
+		tagsCmd, tagCmd, citationsCmd, schemaCmd)
 
-	if err := rootCmd.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		cliErr := classifyError(err)
 		if isJSON() {
 			printErrorJSON(cliErr.Code, cliErr.Message, cliErr.Suggestion)

@@ -59,3 +59,4 @@
 | 未指定スライスが JSON `null` 化 | `tag --dry-run` で未指定の add/remove が `null` になり「空は []」規約に反した（PR #12） | `TestEmptyIfNil` / `TestTagDryRunPayloadShape` |
 | 同種データの JSON 形不一致 | `tag` の出力 tags が `[]string` で、`get`/`context` の `[]Tag` と形が違った（PR #12） | `TestTagResultPayloadShape` |
 | 単一行語彙への空白系制御文字混入 | `validateTags` が `\n`/`\t` を許し、タブ入りタグが `tags` 表示を崩した（PR #12） | `TestValidateTags` |
+| タイトル検索の誤同定（無関係論文を found=true で採用） | `searchPaperID` が `limit=1` のトップヒットをタイトル一致を確認せず返し、汎用的な短いタイトル（例 "Introduction"）で無関係論文の引用ネットワークを黙って構築していた（issue #16） | `TestResolvePaperIDRejectsUnrelatedTitleHit` / `TestResolvePaperIDScansCandidatesForMatch` / `TestResolvePaperIDMatchesDespiteCaseAndPunctuation` |
