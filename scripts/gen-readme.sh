@@ -29,10 +29,18 @@ command -v jq > /dev/null 2>&1 || fail "jq is required"
 # go is only needed when reading the live schema (not when a test supplies one).
 [ -n "${GEN_README_SCHEMA_FILE:-}" ] || command -v go > /dev/null 2>&1 || fail "go is required"
 [ -f "$README" ] || fail "README not found: ${README}"
-# Anchor at line start so a mention of the marker text in prose (e.g. in the
-# "Keeping the README in sync" section) is not mistaken for the real marker.
-grep -q "^<!-- ${BEGIN_MARKER}" "$README" || fail "marker not found in README: ${BEGIN_MARKER}"
-grep -q "^<!-- ${END_MARKER}" "$README" || fail "marker not found in README: ${END_MARKER}"
+# Require EXACTLY ONE of each marker, anchored at line start. Anchoring stops a
+# prose mention of the marker text (e.g. in "Keeping the README in sync") from
+# counting; requiring exactly one rejects a corrupt README before render, since
+# a missing END would truncate trailing content and a duplicate BEGIN would
+# inject the table twice.
+require_one_marker() {
+  local label="$1" pattern="$2" n
+  n="$(grep -c "$pattern" "$README")"
+  [ "$n" -eq 1 ] || fail "expected exactly 1 ${label} marker in README, found ${n}"
+}
+require_one_marker "BEGIN" "^<!-- ${BEGIN_MARKER}"
+require_one_marker "END" "^<!-- ${END_MARKER}"
 
 # build_table — schema の JSON から Markdown 表を組み立てて stdout に出す。
 # パイプ文字はセルを壊すのでエスケープする（実データには通常含まれないが保険）。
@@ -59,11 +67,13 @@ build_table() {
 }
 
 # render — README 全文を生成し、マーカー間を生成表で差し替えて stdout に出す。
+# マーカーは index($0,m)==1（行頭の literal 一致）で判定する。正規表現ではない
+# ので、マーカー文字列に括弧等のメタ文字が入っても安全。
 render() {
   local table_file="$1"
-  awk -v tf="$table_file" -v b="^<!-- $BEGIN_MARKER" -v e="^<!-- $END_MARKER" '
-    $0 ~ b { print; while ((getline line < tf) > 0) print line; skip = 1; next }
-    $0 ~ e { skip = 0; print; next }
+  awk -v tf="$table_file" -v b="<!-- $BEGIN_MARKER" -v e="<!-- $END_MARKER" '
+    index($0, b) == 1 { print; while ((getline line < tf) > 0) print line; skip = 1; next }
+    index($0, e) == 1 { skip = 0; print; next }
     skip != 1 { print }
   ' "$README"
 }
@@ -82,6 +92,11 @@ main() {
   } > "$tmp_table"
 
   render "$tmp_table" > "$tmp_out"
+
+  # Safety net: the rendered output must still contain the END marker. If render
+  # ever dropped trailing content, this aborts before we overwrite the README.
+  grep -q "^<!-- ${END_MARKER}" "$tmp_out" \
+    || fail "internal: rendered output lost the END marker; aborting to avoid data loss"
 
   if [ "$check" -eq 1 ]; then
     if ! diff -u "$README" "$tmp_out" > /dev/null; then
