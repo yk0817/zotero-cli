@@ -41,6 +41,7 @@ The table below is generated from `zotero-cli schema` and kept in sync by
 
 | Command | Description | Arguments |
 |---------|-------------|-----------|
+| `add` | Add a library item resolved from a DOI, arXiv ID, ISBN, or URL | none — supply exactly one of --doi, --arxiv, --isbn, --url |
 | `add-note` | Add a note to an item | parentItemKey: 8-character alphanumeric item key of parent item (required) |
 | `annotations` | Show annotations (highlights/comments) of an item | itemKey: 8-character alphanumeric item key (required) |
 | `bibtex` | Export as BibTeX | query: search keyword (optional, requires --all or --collection if omitted) |
@@ -149,6 +150,39 @@ zotero-cli export --tag "review" --format json
 zotero-cli export --collection ZVUDP75D --format full
 zotero-cli export --keys "FQVL7ZHM,99NU4NKK"
 ```
+
+### Adding Items by Identifier
+
+Create a new library item by resolving its metadata from a DOI, arXiv ID, ISBN,
+or URL. Supply exactly one identifier. 日本語: DOI / arXiv ID / ISBN / URL のいず
+れか一つから書誌情報を解決して新しい item を作成します。
+
+```bash
+# Resolve and add (metadata source in parentheses)
+zotero-cli add --doi 10.1038/s41586-021-03819-2     # Crossref
+zotero-cli add --arxiv 1706.03762                    # arXiv API
+zotero-cli add --isbn 978-0-262-03384-8              # OpenLibrary
+zotero-cli add --url https://example.com/some-article # embedded page metadata
+
+# File into a collection and tag on creation
+zotero-cli add --doi 10.1145/3292500.3330701 --collection ABCD1234 --tags to-read,graphs
+
+# Preview the resolved payload without writing to the library
+zotero-cli add --arxiv 1706.03762 --dry-run --output json
+```
+
+**Duplicate handling (`--if-exists`).** Before creating, `add` looks for an
+existing item with the same identifier (matched exactly on DOI / arXiv ID /
+ISBN / URL, not a fuzzy search):
+
+- `skip` (default) — report the existing item and create nothing.
+- `update` — refresh the existing item's bibliographic fields (tags and
+  collections are left untouched; a version check prevents clobbering a
+  concurrent edit).
+- `duplicate` — add a second item anyway.
+
+`--dry-run` resolves the metadata (so it still calls Crossref/arXiv/OpenLibrary
+or fetches the page) but makes **no write** to your Zotero library.
 
 ### Notes
 
