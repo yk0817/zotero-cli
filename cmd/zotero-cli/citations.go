@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -20,24 +19,6 @@ const (
 	dirForward  = "forward"
 	dirBoth     = "both"
 )
-
-// arxivIDPattern extracts an arXiv identifier from a URL such as
-// https://arxiv.org/abs/2301.01234v2 or .../pdf/2301.01234. Zotero has no
-// dedicated arXiv field, so the URL is the most reliable place to find it when
-// a DOI is absent.
-var arxivIDPattern = regexp.MustCompile(`arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)`)
-
-// extractArxivID returns the arXiv ID for an item, or "" if none is found. It
-// looks at the URL and at an arXiv-style DOI (10.48550/arXiv.<id>).
-func extractArxivID(d zotero.ItemData) string {
-	if m := arxivIDPattern.FindStringSubmatch(d.URL); m != nil {
-		return m[1]
-	}
-	if id := strings.TrimPrefix(d.DOI, "10.48550/arXiv."); id != d.DOI {
-		return id
-	}
-	return ""
-}
 
 // citationsData is the JSON payload shape (inside the {"ok":true,"data":...}
 // envelope). backward/forward are always non-nil so an empty network renders as
@@ -85,7 +66,7 @@ func newCitationsCmd() *cobra.Command {
 
 			sc := scholar.NewClient()
 			ctx := cmd.Context()
-			paperID, err := sc.ResolvePaperID(ctx, item.Data.DOI, extractArxivID(item.Data), item.Data.Title)
+			paperID, err := sc.ResolvePaperID(ctx, item.Data.DOI, zotero.ExtractArxivID(item.Data), item.Data.Title)
 			if err != nil {
 				if errors.Is(err, scholar.ErrPaperNotFound) {
 					return &CLIError{

@@ -294,6 +294,23 @@ func TestRunUsesCanonicalURLForDedup(t *testing.T) {
 	}
 }
 
+// Contract: an invalid --if-exists mode is rejected by Run (via
+// duplicateAction) rather than silently defaulting to a write, so a typo cannot
+// cause an unintended create/update.
+func TestRunRejectsInvalidMode(t *testing.T) {
+	lib := &stubLibrary{createdKey: "SHOULD_NOT_BE_USED"}
+	data := zotero.ItemData{ItemType: "journalArticle", DOI: "10.1/x"}
+
+	_, err := Run(lib, data, KindDOI, "10.1/x", "bogus")
+
+	if err == nil {
+		t.Fatal("expected error for invalid mode, got nil")
+	}
+	if len(lib.created) != 0 {
+		t.Errorf("expected no CreateItem call on invalid mode, got %d", len(lib.created))
+	}
+}
+
 // Contract: a CreateItem failure is surfaced as an error, never a phantom
 // success.
 func TestRunSurfacesCreateFailure(t *testing.T) {

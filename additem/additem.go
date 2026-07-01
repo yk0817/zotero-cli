@@ -94,9 +94,9 @@ func SelectIdentifier(doi, arxiv, isbn, url string) (string, string, error) {
 	case 1:
 		return chosen[0].kind, chosen[0].value, nil
 	case 0:
-		return "", "", fmt.Errorf("no identifier given; provide exactly one of DOI, arXiv ID, ISBN, or URL")
+		return "", "", fmt.Errorf("no identifier given")
 	default:
-		return "", "", fmt.Errorf("multiple identifiers given; provide exactly one of DOI, arXiv ID, ISBN, or URL")
+		return "", "", fmt.Errorf("multiple identifiers given")
 	}
 }
 
@@ -106,7 +106,7 @@ func ValidateIfExists(mode string) error {
 	case IfExistsSkip, IfExistsUpdate, IfExistsDuplicate:
 		return nil
 	default:
-		return fmt.Errorf("invalid if-exists %q; use one of: skip, update, duplicate", mode)
+		return fmt.Errorf("invalid if-exists %q", mode)
 	}
 }
 
@@ -244,17 +244,16 @@ func duplicateAction(dup *zotero.Item, mode string) (string, error) {
 	}
 }
 
-var (
-	arxivIDPattern     = regexp.MustCompile(`arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)`)
-	arxivVersionSuffix = regexp.MustCompile(`v[0-9]+$`)
-)
+// arxivVersionSuffix matches a trailing arXiv version (e.g. "v7"), stripped so
+// a versioned and unversioned ID of the same paper compare equal.
+var arxivVersionSuffix = regexp.MustCompile(`v[0-9]+$`)
 
 func matchesIdentifier(d zotero.ItemData, kind, value string) bool {
 	switch kind {
 	case KindDOI:
 		return d.DOI != "" && strings.EqualFold(d.DOI, value)
 	case KindArxiv:
-		got := stripArxivVersion(extractArxivID(d))
+		got := stripArxivVersion(zotero.ExtractArxivID(d))
 		return got != "" && got == stripArxivVersion(value)
 	case KindISBN:
 		return d.ISBN != "" && resolve.NormalizeISBN(d.ISBN) == resolve.NormalizeISBN(value)
@@ -263,18 +262,6 @@ func matchesIdentifier(d zotero.ItemData, kind, value string) bool {
 	default:
 		return false
 	}
-}
-
-// extractArxivID returns the arXiv ID for an item from its URL or an
-// arXiv-style DOI (10.48550/arXiv.<id>), or "" if none is present.
-func extractArxivID(d zotero.ItemData) string {
-	if m := arxivIDPattern.FindStringSubmatch(d.URL); m != nil {
-		return m[1]
-	}
-	if id := strings.TrimPrefix(d.DOI, "10.48550/arXiv."); id != d.DOI {
-		return id
-	}
-	return ""
 }
 
 func stripArxivVersion(id string) string {
