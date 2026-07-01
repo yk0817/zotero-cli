@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/yk0817/zotero-cli/zotero"
 )
 
-const crossrefWorksURL = "https://api.crossref.org/works/"
+const crossrefHost = "api.crossref.org"
 
 type crossrefResponse struct {
 	Message crossrefWork `json:"message"`
@@ -46,7 +47,11 @@ func (c *Client) ResolveDOI(ctx context.Context, doi string) (zotero.ItemData, e
 		return zotero.ItemData{}, fmt.Errorf("empty DOI")
 	}
 
-	body, err := c.get(ctx, crossrefWorksURL+doi, "application/json")
+	// Build via url.URL so a DOI containing ?/#/& is escaped into the path
+	// rather than reinterpreted as query/fragment (a DOI's own '/' stays a
+	// path separator, which is what Crossref expects).
+	endpoint := url.URL{Scheme: "https", Host: crossrefHost, Path: "/works/" + doi}
+	body, err := c.get(ctx, endpoint.String(), "application/json")
 	if err != nil {
 		return zotero.ItemData{}, err
 	}

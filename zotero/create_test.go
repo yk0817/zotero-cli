@@ -123,7 +123,7 @@ func TestBuildItemPayloadPersonCreatorOmitsEmptyName(t *testing.T) {
 // duplicate detection that matches on it.
 func TestBuildItemPayloadUsesUppercaseIdentifierKeys(t *testing.T) {
 	payload := BuildItemPayload(ItemData{
-		ItemType: "journalArticle",
+		ItemType: "book", // a type that has both DOI and ISBN fields
 		DOI:      "10.1234/abc",
 		ISBN:     "9780262033848",
 	})
@@ -151,6 +151,62 @@ func TestBuildItemPayloadIncludesCollectionsWhenSet(t *testing.T) {
 	}
 	if len(cols) != 1 || cols[0] != "ABCD1234" {
 		t.Errorf("expected collections [ABCD1234], got %v", cols)
+	}
+}
+
+// Contract: publisher and ISBN are transmitted only for item types that
+// actually define those fields (book/bookSection/conferencePaper). Crossref
+// populates publisher on nearly every record — including journalArticle,
+// preprint, report and dataset, none of which have a publisher field — so
+// sending it unconditionally would make Zotero reject the whole item. The
+// fields are gated by type, erring toward omission.
+func TestBuildItemPayloadGatesPublisherAndISBNByType(t *testing.T) {
+	tests := []struct {
+		itemType      string
+		wantPublisher bool
+		wantISBN      bool
+	}{
+		{"book", true, true},
+		{"bookSection", true, true},
+		{"conferencePaper", true, true},
+		{"journalArticle", false, false},
+		{"preprint", false, false},
+		{"report", false, false},
+		{"dataset", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.itemType, func(t *testing.T) {
+			payload := BuildItemPayload(ItemData{
+				ItemType:  tt.itemType,
+				Publisher: "Some University Press",
+				ISBN:      "9780262033848",
+			})
+
+			if _, has := payload["publisher"]; has != tt.wantPublisher {
+				t.Errorf("publisher present = %v, want %v", has, tt.wantPublisher)
+			}
+			if _, has := payload["ISBN"]; has != tt.wantISBN {
+				t.Errorf("ISBN present = %v, want %v", has, tt.wantISBN)
+			}
+		})
+	}
+}
+
+// Contract: the container title is emitted only for the item type that defines
+// its field name, so a mislabeled ItemData (e.g. bookTitle set on a
+// journalArticle) cannot slip an invalid field past into the write payload.
+func TestBuildItemPayloadGatesContainerFieldsByType(t *testing.T) {
+	// bookTitle belongs to bookSection; on a journalArticle it must be dropped.
+	journal := BuildItemPayload(ItemData{ItemType: "journalArticle", BookTitle: "A Book"})
+	if _, has := journal["bookTitle"]; has {
+		t.Errorf("bookTitle must not be sent for journalArticle: %v", journal["bookTitle"])
+	}
+
+	// publicationTitle belongs to journalArticle and is emitted there.
+	section := BuildItemPayload(ItemData{ItemType: "journalArticle", PublicationTitle: "Nature"})
+	if section["publicationTitle"] != "Nature" {
+		t.Errorf("publicationTitle should be sent for journalArticle, got %v", section["publicationTitle"])
 	}
 }
 

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/yk0817/zotero-cli/zotero"
 )
 
-const arxivQueryURL = "http://export.arxiv.org/api/query?id_list="
+const arxivQueryURL = "http://export.arxiv.org/api/query"
 
 type arxivFeed struct {
 	XMLName xml.Name     `xml:"feed"`
@@ -45,7 +46,8 @@ func (c *Client) ResolveArXiv(ctx context.Context, id string) (zotero.ItemData, 
 		return zotero.ItemData{}, fmt.Errorf("empty arXiv ID")
 	}
 
-	body, err := c.get(ctx, arxivQueryURL+id, "application/atom+xml")
+	query := url.Values{"id_list": {id}}.Encode()
+	body, err := c.get(ctx, arxivQueryURL+"?"+query, "application/atom+xml")
 	if err != nil {
 		return zotero.ItemData{}, err
 	}

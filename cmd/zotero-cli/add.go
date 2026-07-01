@@ -134,11 +134,15 @@ func runAdd(kind, value string, data zotero.ItemData, ifExists string) error {
 		return err
 	}
 
-	candidates, err := client.FullTextSearch(value, "", dedupSearchLimit)
+	// Dedupe against the resolved identifier: for a URL that is the canonical
+	// og:url (which may differ from what the user typed), for everything else
+	// the identifier value itself.
+	match := dedupValue(kind, value, data)
+	candidates, err := client.FullTextSearch(match, "", dedupSearchLimit)
 	if err != nil {
 		return &CLIError{Code: ErrCodeAPIError, Message: err.Error()}
 	}
-	dup := findDuplicate(candidates, kind, value)
+	dup := findDuplicate(candidates, kind, match)
 
 	action, err := duplicateAction(dup, ifExists)
 	if err != nil {
@@ -150,19 +154,18 @@ func runAdd(kind, value string, data zotero.ItemData, ifExists string) error {
 		Title:          data.Title,
 		Identifier:     value,
 		IdentifierKind: kind,
+		Duplicate:      dup != nil,
 	}
 	switch action {
 	case actionSkip:
 		result.Action = "skipped"
 		result.ItemKey = dup.Key
-		result.Duplicate = true
 	case actionUpdate:
 		if err := client.UpdateItem(dup.Key, dup.Version, updatePayload(data)); err != nil {
 			return &CLIError{Code: ErrCodeAPIError, Message: err.Error()}
 		}
 		result.Action = "updated"
 		result.ItemKey = dup.Key
-		result.Duplicate = true
 	default: // actionCreate
 		key, err := client.CreateItem(data)
 		if err != nil {
@@ -245,6 +248,16 @@ func duplicateAction(dup *zotero.Item, mode string) (string, error) {
 	default: // skip
 		return actionSkip, nil
 	}
+}
+
+// dedupValue is the identifier value used to detect an existing item: the
+// resolved canonical URL for a URL add (so a redirect/tracking-param URL still
+// matches on re-run), or the raw identifier for DOI/arXiv/ISBN.
+func dedupValue(kind, rawValue string, data zotero.ItemData) string {
+	if kind == kindURL && data.URL != "" {
+		return data.URL
+	}
+	return rawValue
 }
 
 // findDuplicate returns the first candidate whose identifier field exactly

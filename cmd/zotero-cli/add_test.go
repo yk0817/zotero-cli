@@ -134,6 +134,23 @@ func TestDuplicateAction(t *testing.T) {
 	}
 }
 
+// Contract: duplicate detection for a URL uses the resolved/canonical URL
+// (og:url stored on the item), not the raw string the user typed. A page whose
+// canonical URL differs from the typed URL (redirects, tracking params) must
+// still be recognized as already-present on re-run; otherwise --if-exists
+// skip/update silently re-adds it forever. Other kinds dedupe on the identifier
+// value itself.
+func TestDedupValue(t *testing.T) {
+	data := zotero.ItemData{URL: "https://example.com/canonical"}
+
+	if got := dedupValue(kindURL, "https://example.com/typed?utm=1", data); got != "https://example.com/canonical" {
+		t.Errorf("url dedupValue = %q, want the resolved canonical URL", got)
+	}
+	if got := dedupValue(kindDOI, "10.1/x", data); got != "10.1/x" {
+		t.Errorf("doi dedupValue = %q, want the identifier value", got)
+	}
+}
+
 // Contract: user-supplied --tags and --collection are merged into the resolved
 // metadata before it is written, so `add --tags a,b --collection KEY` files and
 // tags the new item in one shot. Resolved tags (if any) are preserved.

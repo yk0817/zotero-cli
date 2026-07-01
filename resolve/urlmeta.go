@@ -11,7 +11,9 @@ import (
 )
 
 var (
-	metaTagRE  = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
+	// metaTagRE matches a full <meta> tag, treating quoted attribute values as
+	// opaque so a literal '>' inside content="…" does not end the tag early.
+	metaTagRE  = regexp.MustCompile(`(?is)<meta\b(?:"[^"]*"|'[^']*'|[^>"'])*>`)
 	attrRE     = regexp.MustCompile(`(?is)([a-zA-Z][a-zA-Z0-9:_.-]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 	titleTagRE = regexp.MustCompile(`(?is)<title\b[^>]*>(.*?)</title>`)
 )

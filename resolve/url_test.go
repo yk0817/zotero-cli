@@ -111,6 +111,30 @@ func TestResolveURLParsesReversedAttributeOrder(t *testing.T) {
 	}
 }
 
+const htmlTitleWithGT = `<html><head>
+<meta name="citation_title" content="Proofs that P > NP for restricted models">
+<meta name="citation_journal_title" content="J. Fake Results">
+</head></html>`
+
+// Contract: a meta tag whose attribute value contains a literal '>' is parsed
+// in full, not truncated at the first '>'. A quote-unaware scan would drop the
+// title — often the only title source — making ResolveURL fail on a page it
+// should resolve.
+func TestResolveURLHandlesGreaterThanInAttribute(t *testing.T) {
+	client, _ := newTestClient(map[string]stubResponse{
+		"example.org": {status: 200, body: htmlTitleWithGT},
+	})
+
+	data, err := client.ResolveURL(context.Background(), "https://example.org/paper")
+
+	if err != nil {
+		t.Fatalf("ResolveURL returned error: %v", err)
+	}
+	if data.Title != "Proofs that P > NP for restricted models" {
+		t.Errorf("title = %q, want the full title including '>'", data.Title)
+	}
+}
+
 // Contract: when a page has no discernible title (no citation_title, og:title,
 // or <title>), ResolveURL errors instead of creating a titleless item — an
 // item with no title is useless and reads as a failure to a human or LLM.

@@ -22,21 +22,48 @@ func BuildItemPayload(d ItemData) map[string]interface{} {
 	setIfNotEmpty(payload, "abstractNote", d.AbstractNote)
 	setIfNotEmpty(payload, "url", d.URL)
 	setIfNotEmpty(payload, "DOI", d.DOI)
-	setIfNotEmpty(payload, "ISBN", d.ISBN)
-	setIfNotEmpty(payload, "publisher", d.Publisher)
-	setIfNotEmpty(payload, "publicationTitle", d.PublicationTitle)
-	setIfNotEmpty(payload, "proceedingsTitle", d.ProceedingsTitle)
-	setIfNotEmpty(payload, "bookTitle", d.BookTitle)
+	setTypedField(payload, d.ItemType, "ISBN", d.ISBN)
+	setTypedField(payload, d.ItemType, "publisher", d.Publisher)
+	setTypedField(payload, d.ItemType, "publicationTitle", d.PublicationTitle)
+	setTypedField(payload, d.ItemType, "proceedingsTitle", d.ProceedingsTitle)
+	setTypedField(payload, d.ItemType, "bookTitle", d.BookTitle)
 	if len(d.Collections) > 0 {
 		payload["collections"] = d.Collections
 	}
 	return payload
 }
 
+// validForType gates the fields that exist only on some Zotero item types.
+// Sending a field to a type that lacks it makes Zotero reject the whole item
+// (its "failed" map), so BuildItemPayload emits these only for the listed
+// types. The lists err toward omission: a missing field merely loses a detail,
+// whereas an invalid one fails the write. Fields valid on essentially every
+// type (title, date, url, abstractNote, DOI) are not gated here — resolvers do
+// not set DOI on a type that lacks it (e.g. webpage).
+var validForType = map[string]map[string]bool{
+	"ISBN":             {"book": true, "bookSection": true, "conferencePaper": true},
+	"publisher":        {"book": true, "bookSection": true, "conferencePaper": true},
+	"publicationTitle": {"journalArticle": true, "magazineArticle": true, "newspaperArticle": true},
+	"proceedingsTitle": {"conferencePaper": true},
+	"bookTitle":        {"bookSection": true},
+}
+
 func setIfNotEmpty(m map[string]interface{}, key, value string) {
 	if value != "" {
 		m[key] = value
 	}
+}
+
+// setTypedField sets a field only when it is non-empty and valid for the given
+// item type (see validForType).
+func setTypedField(m map[string]interface{}, itemType, key, value string) {
+	if value == "" {
+		return
+	}
+	if allowed := validForType[key]; allowed != nil && !allowed[itemType] {
+		return
+	}
+	m[key] = value
 }
 
 // creatorsPayload renders creators as field maps carrying only the populated

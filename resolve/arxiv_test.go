@@ -89,6 +89,36 @@ func TestResolveArXivSetsURLAndArxivDOI(t *testing.T) {
 	}
 }
 
+const arxivWithPublishedDOI = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2101.00001v1</id>
+    <title>A Preprint Later Published</title>
+    <published>2021-01-01T00:00:00Z</published>
+    <author><name>Jane Doe</name></author>
+    <arxiv:doi xmlns:arxiv="http://arxiv.org/schemas/atom">10.1103/PhysRevX.11.011001</arxiv:doi>
+  </entry>
+</feed>`
+
+// Contract: when the arXiv entry carries a published journal DOI (<arxiv:doi>),
+// that DOI is stored instead of the synthetic 10.48550/arXiv.<id>, so the item
+// points at the version of record. The namespaced element is matched by local
+// name (encoding/xml ignores the prefix).
+func TestResolveArXivUsesPublishedDOI(t *testing.T) {
+	client, _ := newTestClient(map[string]stubResponse{
+		"export.arxiv.org": {status: 200, body: arxivWithPublishedDOI},
+	})
+
+	data, err := client.ResolveArXiv(context.Background(), "2101.00001")
+
+	if err != nil {
+		t.Fatalf("ResolveArXiv returned error: %v", err)
+	}
+	if data.DOI != "10.1103/PhysRevX.11.011001" {
+		t.Errorf("DOI = %q, want the published arxiv:doi", data.DOI)
+	}
+}
+
 // Contract: the request goes to the arXiv query API with the id in id_list, so
 // the resolver asks for exactly the requested preprint.
 func TestResolveArXivRequestsQueryPath(t *testing.T) {
