@@ -328,8 +328,11 @@ Any stdio MCP client works — point its `command` at the built `zotero-mcp` bin
 | `zotero_get_context` | `item_key` | Metadata + abstract + full text + annotations + notes + attachments |
 | `zotero_add_note` | `item_key`, `body`, `tags?` | Create a child note on an item; always tagged `ai-generated` |
 | `zotero_delete_note` | `item_key`, `confirm` | Delete a single `ai-generated` note; `confirm=false` previews, `confirm=true` deletes |
+| `zotero_add_item` | `doi?`, `arxiv?`, `isbn?`, `url?`, `collection?`, `tags?` | Add a library item resolved from one identifier; skips if it already exists |
 
-`zotero_add_note` and `zotero_delete_note` are the only write tools; everything else is read-only. If an item has no synced annotations, the read tools return a hint about Zotero sync instead of an empty response.
+`zotero_add_note`, `zotero_delete_note`, and `zotero_add_item` are the only write tools; everything else is read-only. If an item has no synced annotations, the read tools return a hint about Zotero sync instead of an empty response.
+
+`zotero_add_item` takes exactly one identifier and always runs in skip mode: if an item with the same DOI/arXiv ID/ISBN/URL already exists, it is reported and nothing new is created, so an autonomous caller cannot fill the library with duplicates.
 
 Because the MCP server runs unattended, `zotero_delete_note` carries an extra guardrail beyond the CLI: it deletes **only notes that carry the `ai-generated` tag**, so the model can undo notes it created but can never remove a human-written note, a paper, or an attachment. It also takes one key per call (no bulk deletion) and requires `confirm=true` after a preview.
 

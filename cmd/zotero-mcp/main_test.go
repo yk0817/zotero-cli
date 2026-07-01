@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/yk0817/zotero-cli/additem"
+	"github.com/yk0817/zotero-cli/resolve"
 	"github.com/yk0817/zotero-cli/zotero"
 )
 
@@ -306,5 +308,167 @@ func TestAddNoteHandlerRejectsEmptyBody(t *testing.T) {
 	}
 	if rt.lastMethod != "" {
 		t.Errorf("expected no API call for empty body, got %s", rt.lastMethod)
+	}
+}
+
+// stubResolver returns canned metadata so add_item tests run offline.
+type stubResolver struct {
+	data  zotero.ItemData
+	err   error
+	calls int
+}
+
+func (s *stubResolver) resolve() (zotero.ItemData, error) { s.calls++; return s.data, s.err }
+
+func (s *stubResolver) ResolveDOI(_ context.Context, _ string) (zotero.ItemData, error) {
+	return s.resolve()
+}
+func (s *stubResolver) ResolveArXiv(_ context.Context, _ string) (zotero.ItemData, error) {
+	return s.resolve()
+}
+func (s *stubResolver) ResolveISBN(_ context.Context, _ string) (zotero.ItemData, error) {
+	return s.resolve()
+}
+func (s *stubResolver) ResolveURL(_ context.Context, _ string) (zotero.ItemData, error) {
+	return s.resolve()
+}
+
+// methodStubTransport serves one body for GET (the dedup search) and another
+// for POST (the create), so add_item's two-step flow can be exercised offline.
+type methodStubTransport struct {
+	getBody  string
+	postBody string
+	lastPost []byte
+}
+
+func (m *methodStubTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := m.getBody
+	if req.Method == http.MethodPost {
+		if req.Body != nil {
+			m.lastPost, _ = io.ReadAll(req.Body)
+		}
+		body = m.postBody
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{},
+	}, nil
+}
+
+func newMethodStubClient(getBody, postBody string) (*zotero.Client, *methodStubTransport) {
+	rt := &methodStubTransport{getBody: getBody, postBody: postBody}
+	c := zotero.NewClient("test-key", "12345")
+	c.HTTPClient = &http.Client{Transport: rt}
+	return c, rt
+}
+
+// Contract: zotero_add_item resolves the identifier and creates the item when
+// it's new, reporting the created key and sending the resolved title in the
+// POST payload (asserted on the decoded body, not raw-string matching).
+func TestAddItemHandlerCreatesItem(t *testing.T) {
+	client, rt := newMethodStubClient(`[]`, `{"successful":{"0":{"key":"NEW00001"}},"failed":{}}`)
+	resolver := &stubResolver{data: zotero.ItemData{ItemType: "journalArticle", Title: "A Paper", DOI: "10.1/x"}}
+	handler := addItemHandler(client, resolver)
+
+	res, _, err := handler(context.Background(), nil, addItemInput{DOI: "10.1/x"})
+
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if text := textOf(t, res); !strings.Contains(text, "NEW00001") {
+		t.Errorf("expected created key in result, got %q", text)
+	}
+	var payload []struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rt.lastPost, &payload); err != nil || len(payload) != 1 {
+		t.Fatalf("POST body is not a 1-item array: %v (%s)", err, rt.lastPost)
+	}
+	if payload[0].Title != "A Paper" {
+		t.Errorf("created item title = %q, want A Paper", payload[0].Title)
+	}
+}
+
+// Contract: an identifier already in the library is skipped, not duplicated —
+// an autonomous tool must never flood the library with copies.
+func TestAddItemHandlerSkipsExisting(t *testing.T) {
+	client, rt := newMethodStubClient(`[{"key":"OLD00001","data":{"DOI":"10.1/x"}}]`, `{}`)
+	resolver := &stubResolver{data: zotero.ItemData{ItemType: "journalArticle", Title: "A Paper", DOI: "10.1/x"}}
+	handler := addItemHandler(client, resolver)
+
+	res, _, err := handler(context.Background(), nil, addItemInput{DOI: "10.1/x"})
+
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	text := textOf(t, res)
+	if !strings.Contains(text, "OLD00001") || !strings.Contains(text, "Already in library") {
+		t.Errorf("expected skip message with existing key, got %q", text)
+	}
+	if rt.lastPost != nil {
+		t.Errorf("expected no create POST when duplicate exists, got body %s", rt.lastPost)
+	}
+}
+
+// Contract: exactly one identifier is required; zero identifiers is a usage
+// error caught before any resolve or API call.
+func TestAddItemHandlerRequiresOneIdentifier(t *testing.T) {
+	client, _ := newMethodStubClient(`[]`, `{}`)
+	resolver := &stubResolver{}
+
+	_, _, err := addItemHandler(client, resolver)(context.Background(), nil, addItemInput{})
+
+	if err == nil {
+		t.Fatal("expected error for missing identifier, got nil")
+	}
+	if resolver.calls != 0 {
+		t.Errorf("resolver called %d times, want 0 (no identifier)", resolver.calls)
+	}
+}
+
+// Contract: an invalid collection key is rejected before resolving, since it is
+// interpolated into a request path and comes from the model.
+func TestAddItemHandlerValidatesCollectionKey(t *testing.T) {
+	client, _ := newMethodStubClient(`[]`, `{}`)
+	resolver := &stubResolver{}
+
+	_, _, err := addItemHandler(client, resolver)(context.Background(), nil, addItemInput{DOI: "10.1/x", Collection: "bad"})
+
+	if err == nil {
+		t.Fatal("expected error for invalid collection key, got nil")
+	}
+	if resolver.calls != 0 {
+		t.Errorf("resolver called %d times, want 0 (invalid collection)", resolver.calls)
+	}
+}
+
+// Contract: a resolver failure (e.g. unknown identifier) surfaces as an error,
+// never a phantom created item.
+func TestAddItemHandlerResolveError(t *testing.T) {
+	client, rt := newMethodStubClient(`[]`, `{"successful":{"0":{"key":"X"}},"failed":{}}`)
+	resolver := &stubResolver{err: resolve.ErrNotFound}
+	handler := addItemHandler(client, resolver)
+
+	_, _, err := handler(context.Background(), nil, addItemInput{DOI: "10.9/nope"})
+
+	if err == nil {
+		t.Fatal("expected error for unresolved identifier, got nil")
+	}
+	if rt.lastPost != nil {
+		t.Errorf("expected no create POST on resolve failure, got %s", rt.lastPost)
+	}
+}
+
+// Contract: the human-readable result distinguishes a created item from a
+// skipped duplicate, so the caller (and the model) can tell what happened.
+func TestFormatAddItemResult(t *testing.T) {
+	created := formatAddItemResult(additem.Result{Action: additem.ActionCreated, ItemKey: "NEW00001", Title: "T", ItemType: "journalArticle", IdentifierKind: "doi", Identifier: "10.1/x"})
+	if !strings.Contains(created, "created") || !strings.Contains(created, "NEW00001") {
+		t.Errorf("created message = %q", created)
+	}
+	skipped := formatAddItemResult(additem.Result{Action: additem.ActionSkipped, ItemKey: "OLD00001", Title: "T", IdentifierKind: "doi"})
+	if !strings.Contains(skipped, "Already in library") || !strings.Contains(skipped, "OLD00001") {
+		t.Errorf("skipped message = %q", skipped)
 	}
 }
