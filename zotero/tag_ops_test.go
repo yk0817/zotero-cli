@@ -112,6 +112,37 @@ func TestListTagsPaginates(t *testing.T) {
 	}
 }
 
+// Contract: ListTags must not break at the exact tagsPageSize boundary (100).
+// A page that is exactly full is indistinguishable from "more may follow", so
+// the loop continues and fetches the next (empty) page before stopping. This
+// off-by-one boundary must return all 100 tags — no truncation at the first
+// full page, and no infinite loop: exactly 2 requests (full page then empty),
+// then halt.
+func TestListTagsPaginatesAtExactPageBoundary(t *testing.T) {
+	fullPage := make([]string, 100)
+	for i := range fullPage {
+		fullPage[i] = fmt.Sprintf(`{"tag":"tag%03d","meta":{"numItems":1}}`, i)
+	}
+
+	client, qt := newQueryClient("")
+	qt.queue = []string{"[" + strings.Join(fullPage, ",") + "]", "[]"}
+
+	tags, err := client.ListTags()
+
+	if err != nil {
+		t.Fatalf("ListTags returned error: %v", err)
+	}
+	if len(tags) != 100 {
+		t.Fatalf("expected 100 tags at the exact page boundary, got %d", len(tags))
+	}
+	if len(qt.urls) != 2 {
+		t.Fatalf("expected 2 requests (full page then empty page), got %d", len(qt.urls))
+	}
+	if got := qt.urls[1].Query().Get("start"); got != "100" {
+		t.Errorf("expected second request to resume at start=100, got %q", got)
+	}
+}
+
 // Contract: ListTags parses the tag name and its usage count (meta.numItems),
 // which the closed-vocabulary listing shows so a human can tell established
 // tags from one-off ones.
