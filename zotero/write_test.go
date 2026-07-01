@@ -13,6 +13,7 @@ type recordingTransport struct {
 	lastMethod string
 	lastPath   string
 	lastBody   []byte
+	lastHeader http.Header
 	status     int
 	response   string
 }
@@ -20,6 +21,7 @@ type recordingTransport struct {
 func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.lastMethod = req.Method
 	r.lastPath = req.URL.Path
+	r.lastHeader = req.Header.Clone()
 	if req.Body != nil {
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
