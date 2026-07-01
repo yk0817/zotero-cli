@@ -243,13 +243,17 @@ func main() {
 go build -o zotero-mcp ./cmd/zotero-mcp/
 ```
 
-### Setup (Claude Code)
+### Setup (Claude Code — CLI & VS Code)
+
+Register the server once with the CLI. The terminal CLI and the **VS Code extension share the same MCP config**, so this covers both — the extension can't add servers itself; once registered you manage it from the extension's `/mcp` panel. Use user scope so it's available in every project:
 
 ```bash
-claude mcp add zotero -- ~/zotero-cli/zotero-mcp
+claude mcp add --scope user zotero -- ~/zotero-cli/zotero-mcp
 ```
 
-Or add to `.mcp.json` / `~/.claude/settings.json` manually:
+The `--` is required: it separates Claude's own flags from the server command. Scopes: `--scope user` (all your projects, stored in `~/.claude.json`), `--scope project` (writes a shared `.mcp.json`, committed with the repo), or omit for the default `local` (this project only). Verify with `claude mcp list`, or `/mcp` inside Claude Code.
+
+To configure a project by hand instead, add the server to `.mcp.json` at the repo root:
 
 ```json
 {
@@ -261,9 +265,25 @@ Or add to `.mcp.json` / `~/.claude/settings.json` manually:
 }
 ```
 
-### Setup (Cursor and other MCP clients)
+### Setup (Cursor)
 
-Add the same `command` entry to the client's MCP config (e.g., `~/.cursor/mcp.json`).
+Cursor is JSON-only. Add the server to `~/.cursor/mcp.json` for all projects, or `.cursor/mcp.json` in a repo root for just that workspace (the project file takes precedence):
+
+```json
+{
+  "mcpServers": {
+    "zotero": {
+      "command": "/Users/you/zotero-cli/zotero-mcp"
+    }
+  }
+}
+```
+
+Cursor reads this file at startup, so restart Cursor after editing. You can confirm the connection under **Settings → MCP** — a green dot next to `zotero` means it's live.
+
+### Setup (other MCP clients)
+
+Any stdio MCP client works — point its `command` at the built `zotero-mcp` binary by absolute path. Claude Desktop, for example, uses `claude_desktop_config.json` with the same `mcpServers` shape shown above.
 
 ### Tools
 
