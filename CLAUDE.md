@@ -2,6 +2,12 @@
 
 Zotero Web API CLI client. Go + Cobra.
 
+## Language / 言語
+
+This is a public OSS repo, so docs, README, code comments, and issues are English-first. When you write in Japanese, always include an English version too — keep everything bilingual (EN + JA) so non-Japanese users can follow.
+
+公開 OSS リポジトリのため、ドキュメント・README・コードコメント・Issue は英語優先。日本語で書く場合は必ず英語も併記し、常に日英（EN + JA）バイリンガルを保つ。
+
 ## Build & Test
 
 ```bash
