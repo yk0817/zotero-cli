@@ -1,8 +1,10 @@
 // Command zotero-mcp is an MCP server exposing the Zotero Web API.
 // Read tools cover search, annotations, and item context. The write tools are
-// zotero_add_note (creates notes tagged "ai-generated") and zotero_delete_note
-// (removes a single such note). It shares the zotero package with the CLI and
-// reads the same config file (~/.config/zotero-cli/config.json).
+// zotero_add_note (creates notes tagged "ai-generated"), zotero_delete_note
+// (removes a single such note), and zotero_add_item (creates a library item
+// resolved from a DOI/arXiv/ISBN/URL, skipping when the identifier already
+// exists). It shares the zotero package with the CLI and reads the same config
+// file (~/.config/zotero-cli/config.json).
 //
 // Delete guardrails. Because this server runs unattended, zotero_delete_note is
 // fenced so the model can only ever undo its own writes:
@@ -25,6 +27,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/yk0817/zotero-cli/additem"
+	"github.com/yk0817/zotero-cli/resolve"
 	"github.com/yk0817/zotero-cli/zotero"
 )
 
@@ -282,6 +286,56 @@ func deleteNoteHandler(client *zotero.Client) mcp.ToolHandlerFor[deleteNoteInput
 	}
 }
 
+type addItemInput struct {
+	DOI        string   `json:"doi,omitempty" jsonschema:"DOI to add, e.g. 10.1038/s41586-021-03819-2"`
+	ArXiv      string   `json:"arxiv,omitempty" jsonschema:"arXiv ID to add, e.g. 1706.03762"`
+	ISBN       string   `json:"isbn,omitempty" jsonschema:"ISBN to add (creates a book item)"`
+	URL        string   `json:"url,omitempty" jsonschema:"URL to add; bibliographic metadata is read from the page"`
+	Collection string   `json:"collection,omitempty" jsonschema:"optional 8-character collection key to file the item into"`
+	Tags       []string `json:"tags,omitempty" jsonschema:"optional tags to add to the new item"`
+}
+
+// addItemHandler resolves one identifier (DOI/arXiv/ISBN/URL) and creates the
+// library item. It is a non-destructive create (no confirm gate), and it always
+// runs in skip mode: if an item with the same identifier already exists, it is
+// reported and nothing new is created, so an autonomous caller cannot flood the
+// library with duplicates. The resolver is injected so the tool is testable
+// offline.
+func addItemHandler(client *zotero.Client, resolver additem.Resolver) mcp.ToolHandlerFor[addItemInput, any] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, input addItemInput) (*mcp.CallToolResult, any, error) {
+		kind, value, err := additem.SelectIdentifier(input.DOI, input.ArXiv, input.ISBN, input.URL)
+		if err != nil {
+			return nil, nil, err
+		}
+		if input.Collection != "" {
+			if err := zotero.ValidateItemKey(input.Collection); err != nil {
+				return nil, nil, fmt.Errorf("invalid collection key %q: %w", input.Collection, err)
+			}
+		}
+
+		data, err := additem.Resolve(ctx, resolver, kind, value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not resolve %s %q: %w", kind, value, err)
+		}
+		data = additem.ApplyOptions(data, input.Tags, input.Collection)
+
+		result, err := additem.Run(client, data, kind, value, additem.IfExistsSkip)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to add item: %w", err)
+		}
+		return textResult(formatAddItemResult(result)), nil, nil
+	}
+}
+
+func formatAddItemResult(r additem.Result) string {
+	if r.Action == additem.ActionSkipped {
+		return fmt.Sprintf("Already in library (matched by %s): %q [%s]. Nothing was created.",
+			r.IdentifierKind, r.Title, r.ItemKey)
+	}
+	return fmt.Sprintf("Item created: %q [%s] (type: %s, from %s %s)",
+		r.Title, r.ItemKey, r.ItemType, r.IdentifierKind, r.Identifier)
+}
+
 func main() {
 	client, err := loadClient()
 	if err != nil {
@@ -317,6 +371,11 @@ func main() {
 		Name:        "zotero_delete_note",
 		Description: "Delete a single AI-generated note by its key. Guardrailed: only deletes items of type 'note' that carry the 'ai-generated' tag (never papers, attachments, or human-written notes), one key per call. Call with confirm=false first to preview, then confirm=true to delete.",
 	}, deleteNoteHandler(client))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "zotero_add_item",
+		Description: "Add a new library item resolved from a DOI, arXiv ID, ISBN, or URL. Provide exactly one identifier. If an item with the same identifier already exists it is reported and nothing is created (no duplicates).",
+	}, addItemHandler(client, resolve.NewClient()))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("zotero-mcp: server error: %v", err)
