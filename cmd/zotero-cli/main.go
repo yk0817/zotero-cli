@@ -1106,12 +1106,15 @@ func main() {
 	// citations command
 	citationsCmd := newCitationsCmd()
 
+	// add command
+	addCmd := newAddCmd()
+
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
 		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
-		tagsCmd, tagCmd, citationsCmd, schemaCmd)
+		tagsCmd, tagCmd, citationsCmd, addCmd, schemaCmd)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

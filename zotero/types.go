@@ -41,6 +41,18 @@ type ItemData struct {
 	Filename         string    `json:"filename,omitempty"`
 	ParentItem       string    `json:"parentItem,omitempty"`
 
+	// Fields populated when creating items from an external identifier (add
+	// command). They are omitempty so existing reads/marshals of other item
+	// types are unaffected. The container title lives under a different Zotero
+	// field per item type (publicationTitle / proceedingsTitle / bookTitle);
+	// ISBN/publisher belong to books; Collections is the set of collection keys
+	// the item is filed under.
+	ProceedingsTitle string   `json:"proceedingsTitle,omitempty"`
+	BookTitle        string   `json:"bookTitle,omitempty"`
+	ISBN             string   `json:"ISBN,omitempty"`
+	Publisher        string   `json:"publisher,omitempty"`
+	Collections      []string `json:"collections,omitempty"`
+
 	// annotation fields (populated only for itemType == "annotation")
 	AnnotationType       string `json:"annotationType,omitempty"`
 	AnnotationText       string `json:"annotationText,omitempty"`

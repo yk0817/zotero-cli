@@ -24,7 +24,10 @@
 - [ ] **ペイロード形状**: 送信 JSON をデコードして検証する（生文字列マッチ禁止 → [test-style-guide.md](test-style-guide.md)）
 - [ ] **タグポリシー**: AI 作成ノートに `ai-generated` タグが**ちょうど1回**付くか（重複・欠落とも downstream のフィルタを壊す）
 - [ ] **エスケープ**: ユーザー本文が HTML/JSON として解釈されて壊れないか（`i<j`、`AT&T` 等を含むケースを必ず入れる）
-- [ ] **dry-run**: dry-run 指定時に API 呼び出しが発生しないか
+- [ ] **dry-run**: dry-run 指定時に**書き込み API 呼び出しが発生しない**か。注意: `add --dry-run` は payload を見せるためにメタデータ解決（Crossref/arXiv/OpenLibrary/ページ取得）は行う。「呼び出しなし」が保証するのは Zotero への**書き込み**だけ（`tag --dry-run` と同じ扱い）
+- [ ] **識別子による冪等性**: 同一 DOI/arXiv/ISBN/URL の既存 item を検出したら重複作成しないか。検出は quick-search（ゆるい）＋**厳密フィールド一致**で、near-match を誤って重複扱いしない（`add` の `findDuplicate`）。検索が既存を返さない場合は重複を作りうる既知の限界で、`--if-exists skip|update|duplicate` で制御する
+- [ ] **update の非破壊**: `--if-exists update` は書誌フィールドのみ PATCH し、既存の tags/collections を消さない（`updatePayload` が両者を除外）。version 経由の楽観ロックで lost-update を防ぐ
+- [ ] **型別フィールド妥当性**: itemType に無効なフィールドを送らないか（例: `conferencePaper` に `publicationTitle`）。コンテナ誌名は型別フィールド（publicationTitle/proceedingsTitle/bookTitle）へ振り分ける。空フィールドは payload から省く（`BuildItemPayload`）
 
 ## P1: 出力契約（AI エージェントが解析する）
 
