@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -41,9 +43,18 @@ type fakeUploader struct {
 	createdTitle       string
 	createdContentType string
 
-	authCalls       int
+	authCalls    int
+	authItemKey  string
+	authFilename string
+	authFilesize int64
+	authMD5      string
+	authMtime    int64
+
 	uploadedContent []byte
-	registerCalls   int
+
+	registerCalls     int
+	registerItemKey   string
+	registerUploadKey string
 }
 
 func (u *fakeUploader) CreateAttachment(parentKey, filename, title, contentType string, _ []string) (string, error) {
@@ -58,8 +69,13 @@ func (u *fakeUploader) CreateAttachment(parentKey, filename, title, contentType 
 	return "PDFATT01", nil
 }
 
-func (u *fakeUploader) GetUploadAuthorization(_, _ string, _ int64, _ string, _ int64) (*zotero.UploadAuthorization, error) {
+func (u *fakeUploader) GetUploadAuthorization(itemKey, filename string, filesize int64, md5hex string, mtime int64) (*zotero.UploadAuthorization, error) {
 	u.authCalls++
+	u.authItemKey = itemKey
+	u.authFilename = filename
+	u.authFilesize = filesize
+	u.authMD5 = md5hex
+	u.authMtime = mtime
 	if u.authErr != nil {
 		return nil, u.authErr
 	}
@@ -71,8 +87,10 @@ func (u *fakeUploader) UploadFileContent(_ *zotero.UploadAuthorization, content 
 	return u.uploadErr
 }
 
-func (u *fakeUploader) RegisterUpload(_, _ string) error {
+func (u *fakeUploader) RegisterUpload(itemKey, uploadKey string) error {
 	u.registerCalls++
+	u.registerItemKey = itemKey
+	u.registerUploadKey = uploadKey
 	return u.registerErr
 }
 
@@ -106,6 +124,33 @@ func TestAttachOAPDFSuccess(t *testing.T) {
 	}
 	if up.registerCalls != 1 {
 		t.Errorf("RegisterUpload calls = %d, want 1 (upload must be finalized)", up.registerCalls)
+	}
+
+	// The upload-authorization step must describe the actual file: it is keyed on
+	// the attachment item (not the parent), and carries the true byte length and
+	// md5 of the fetched PDF. A wrong size/hash makes Zotero reject or mismatch the
+	// upload, so assert them rather than only that the call happened.
+	sum := md5.Sum([]byte("%PDF-1.7 data"))
+	wantMD5 := hex.EncodeToString(sum[:])
+	if up.authItemKey != "PDFATT01" {
+		t.Errorf("upload-authorization itemKey = %q, want the attachment key PDFATT01", up.authItemKey)
+	}
+	if up.authFilename != "ITEM0001.pdf" {
+		t.Errorf("upload-authorization filename = %q, want ITEM0001.pdf", up.authFilename)
+	}
+	if up.authFilesize != int64(len("%PDF-1.7 data")) {
+		t.Errorf("upload-authorization filesize = %d, want %d (byte length of the PDF)", up.authFilesize, len("%PDF-1.7 data"))
+	}
+	if up.authMD5 != wantMD5 {
+		t.Errorf("upload-authorization md5 = %q, want %q (md5 of the fetched bytes)", up.authMD5, wantMD5)
+	}
+	if up.authMtime <= 0 {
+		t.Errorf("upload-authorization mtime = %d, want a positive timestamp", up.authMtime)
+	}
+	// Finalization must name the same attachment item and the upload key returned
+	// by authorization; swapped or empty args would corrupt the registration.
+	if up.registerItemKey != "PDFATT01" || up.registerUploadKey != "UPKEY123" {
+		t.Errorf("RegisterUpload(itemKey=%q, uploadKey=%q), want (PDFATT01, UPKEY123)", up.registerItemKey, up.registerUploadKey)
 	}
 }
 

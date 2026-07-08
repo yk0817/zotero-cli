@@ -335,6 +335,12 @@ func TestIsBlockedIP(t *testing.T) {
 		{name: "unspecified v4", ip: "0.0.0.0", want: true},
 		{name: "unspecified v6", ip: "::", want: true},
 		{name: "ipv4-mapped loopback", ip: "::ffff:127.0.0.1", want: true},
+		{name: "this-network 0/8 non-zero", ip: "0.1.2.3", want: true},
+		{name: "cgnat 100.64/10 low", ip: "100.64.0.1", want: true},
+		{name: "cgnat 100.64/10 cloud metadata", ip: "100.100.100.200", want: true},
+		{name: "cgnat 100.64/10 high", ip: "100.127.255.255", want: true},
+		{name: "public just above cgnat", ip: "100.128.0.1", want: false},
+		{name: "public just below cgnat", ip: "100.63.255.255", want: false},
 		{name: "public dns 1.1.1.1", ip: "1.1.1.1", want: false},
 		{name: "public dns 8.8.8.8", ip: "8.8.8.8", want: false},
 		{name: "public ipv6", ip: "2606:4700:4700::1111", want: false},
@@ -451,5 +457,65 @@ func TestRedactURL(t *testing.T) {
 				t.Errorf("redactURL(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+// Contract: a response body larger than maxPDFBytes is rejected instead of
+// buffered whole, so a hostile or misbehaving server cannot drive the CLI to
+// allocate unbounded memory. maxPDFBytes is lowered here so the cap is exercised
+// without streaming 100 MiB; the sentinel restores it. A regression that drops
+// the size check (or the LimitReader) would let the oversized body through.
+func TestGetRejectsOversizedBody(t *testing.T) {
+	orig := maxPDFBytes
+	maxPDFBytes = 16
+	defer func() { maxPDFBytes = orig }()
+
+	// Starts with the PDF magic and exceeds the (lowered) cap, so only the size
+	// check — not the magic-byte check — can reject it.
+	oversized := pdfBytes + strings.Repeat("A", 64)
+	f, _ := newTestFetcher("", map[string]cannedResp{
+		"arxiv.test/pdf/2301.01234": {status: 200, body: oversized, contentType: "application/pdf"},
+	})
+	data := zotero.ItemData{URL: "https://arxiv.org/abs/2301.01234"}
+
+	res, err := f.Fetch(context.Background(), data, "")
+
+	if res != nil {
+		t.Fatalf("expected no result for an oversized body, got %+v", res)
+	}
+	if err == nil || errors.Is(err, ErrNoOAPDF) {
+		t.Fatalf("expected a hard size-cap error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error should explain the size cap, got %v", err)
+	}
+}
+
+// Contract: a site-relative citation_pdf_url (content="/papers/full.pdf") is
+// resolved against the source page's scheme+host before download, so an OA PDF
+// advertised with a relative link is fetched rather than silently skipped as a
+// non-http(s) URL. Dropping the resolution would surface a misleading "refusing
+// to fetch" skip for a PDF that is actually available.
+func TestFetchResolvesRelativeCitationPDFURL(t *testing.T) {
+	page := `<html><head><meta name="citation_pdf_url" content="/papers/full.pdf"></head></html>`
+	f, st := newTestFetcher("", map[string]cannedResp{
+		"journal.test/article":         {status: 200, body: page, contentType: "text/html"},
+		"journal.test/papers/full.pdf": {status: 200, body: pdfBytes, contentType: "application/pdf"},
+	})
+	data := zotero.ItemData{ItemType: "journalArticle", URL: "https://journal.test/article"}
+
+	res, err := f.Fetch(context.Background(), data, "https://journal.test/article")
+
+	if err != nil {
+		t.Fatalf("Fetch returned error: %v", err)
+	}
+	if res.Source != SourceCitationPDF {
+		t.Errorf("source = %q, want %q", res.Source, SourceCitationPDF)
+	}
+	if !strings.Contains(res.URL, "journal.test/papers/full.pdf") {
+		t.Errorf("relative citation_pdf_url should resolve to an absolute URL on the page host, got %q", res.URL)
+	}
+	if !st.contacted("journal.test/papers/full.pdf") {
+		t.Errorf("expected the resolved absolute PDF URL to be downloaded, got %v", st.requests)
 	}
 }

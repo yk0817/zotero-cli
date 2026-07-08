@@ -36,9 +36,6 @@ const (
 	fetchTimeout = 60 * time.Second
 	// dialTimeout bounds a single TCP connect (used by the guarded transport).
 	dialTimeout = 15 * time.Second
-	// maxPDFBytes caps a single download so a hostile or misbehaving server
-	// cannot make the CLI buffer an unbounded body into memory.
-	maxPDFBytes = 100 << 20 // 100 MiB
 	// userAgent identifies the client to arXiv/Unpaywall/publishers, matching the
 	// "polite" etiquette the resolve package already follows.
 	userAgent = "zotero-cli (+https://github.com/yk0817/zotero-cli)"
@@ -47,6 +44,11 @@ const (
 	// server returned with a 200 in place of the real file.
 	pdfMagic = "%PDF-"
 )
+
+// maxPDFBytes caps a single download so a hostile or misbehaving server cannot
+// make the CLI buffer an unbounded body into memory. It is a var (not a const)
+// only so a test can lower it to exercise the cap without streaming 100 MiB.
+var maxPDFBytes int64 = 100 << 20 // 100 MiB
 
 // ErrNoOAPDF signals that no open-access PDF could be located for the item (no
 // applicable source, or every source reports no OA copy) — as opposed to a
@@ -136,16 +138,45 @@ func blockInternalDial(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// blockedCIDRs are ranges net.IP's category predicates do not cover but that are
+// still unsafe to dial: RFC 6598 carrier-grade NAT (100.64.0.0/10 — some clouds
+// expose their instance-metadata service here, e.g. Alibaba Cloud at
+// 100.100.100.200) and RFC 1122 "this network" (0.0.0.0/8, which many kernels
+// route to the local host, giving loopback access via a non-127 address). Parsed
+// once; the literals are constant so parsing cannot fail.
+var blockedCIDRs = mustParseCIDRs("100.64.0.0/10", "0.0.0.0/8")
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			panic("oapdf: invalid blocked CIDR " + c)
+		}
+		nets = append(nets, n)
+	}
+	return nets
+}
+
 // isBlockedIP reports whether ip is one the fetcher must never dial: loopback,
 // private (RFC1918 / ULA), link-local unicast or multicast (covers cloud
-// metadata at 169.254.169.254), or the unspecified address. Kept pure so it is
-// unit-testable without a network.
+// metadata at 169.254.169.254), the unspecified address, or one of the
+// blockedCIDRs (CGNAT / "this network"). Kept pure so it is unit-testable
+// without a network.
 func isBlockedIP(ip net.IP) bool {
-	return ip.IsLoopback() ||
+	if ip.IsLoopback() ||
 		ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
+		ip.IsUnspecified() {
+		return true
+	}
+	for _, n := range blockedCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // Fetch locates and downloads an OA PDF for the item, trying arXiv, then
@@ -295,13 +326,31 @@ func (f *Fetcher) citationPDFURL(ctx context.Context, pageURL string) (string, e
 		return "", nil
 	}
 	// Group 1 (content-after-name) or group 2 (content-before-name), whichever
-	// matched.
+	// matched. The content may be site-relative ("/paper.pdf") or
+	// protocol-relative ("//host/paper.pdf"), so resolve it against the page URL
+	// before returning — an unresolved relative URL would later be rejected as a
+	// non-http(s) scheme and a genuinely available PDF would be missed.
 	for _, g := range m[1:] {
 		if len(g) > 0 {
-			return strings.TrimSpace(string(g)), nil
+			return resolveReference(pageURL, strings.TrimSpace(string(g)))
 		}
 	}
 	return "", nil
+}
+
+// resolveReference resolves a possibly-relative href against the page it was
+// found on, yielding an absolute URL. Both the page URL and the href are already
+// query-free here, but redactURL is applied defensively in error text.
+func resolveReference(pageURL, href string) (string, error) {
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return "", fmt.Errorf("citation_pdf_url: invalid page URL %q: %w", redactURL(pageURL), err)
+	}
+	ref, err := url.Parse(href)
+	if err != nil {
+		return "", fmt.Errorf("citation_pdf_url: invalid PDF URL %q: %w", redactURL(href), err)
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 // downloadPDF fetches a candidate PDF URL and validates that the response really
@@ -368,7 +417,7 @@ func (f *Fetcher) get(ctx context.Context, rawURL, accept string) ([]byte, int, 
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", redactURL(rawURL), err)
 	}
-	if len(body) > maxPDFBytes {
+	if int64(len(body)) > maxPDFBytes {
 		return nil, resp.StatusCode, fmt.Errorf("response from %s exceeds %d bytes", redactURL(rawURL), maxPDFBytes)
 	}
 	return body, resp.StatusCode, nil
