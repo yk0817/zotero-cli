@@ -217,6 +217,56 @@ ISBN / URL, not a fuzzy search):
 `--dry-run` resolves the metadata (so it still calls Crossref/arXiv/OpenLibrary
 or fetches the page) but makes **no write** to your Zotero library.
 
+**Attaching an open-access PDF (`--attach-pdf`).** With `--attach-pdf`, after a
+new item is created `add` tries to fetch an open-access PDF and attach it to the
+item (via the same upload path as `zotero-cli upload`). Sources are tried in
+order, stopping at the first that yields a valid PDF:
+
+1. **arXiv** — `https://arxiv.org/pdf/<id>` when the item is an arXiv paper (id
+   taken from its arXiv URL or `10.48550/arXiv.*` DOI).
+2. **Unpaywall** — the DOI is looked up in the [Unpaywall](https://unpaywall.org/)
+   API and its open-access PDF location is used. Unpaywall **requires a contact
+   email**; see below.
+3. **`citation_pdf_url`** — when adding from a `--url`, the source page's
+   `<meta name="citation_pdf_url">` is used.
+
+The downloaded bytes are validated to actually be a PDF (`%PDF` signature)
+before attaching, so an HTML paywall/login page returned in place of the file is
+rejected rather than stored.
+
+**Partial failure never fails the command.** If no open-access PDF is available,
+or the download/upload fails, the item is still created — only the attachment is
+skipped, with a warning. In `--output json` the result carries `pdfAttached`
+(always present) plus `pdfSource` / `attachmentKey` on success or `pdfSkipReason`
+on a skip. A PDF is attached only to a **newly created** item (not to one that
+`--if-exists` skipped or updated), and `--dry-run` never fetches or attaches a
+PDF.
+
+**Unpaywall contact email.** Provide it, in precedence order, via the `--email`
+flag, the `email` field in `~/.config/zotero-cli/config.json` (prompted for by
+`zotero-cli config`), or the `ZOTERO_CLI_EMAIL` environment variable. It is not a
+secret — Unpaywall asks for it only as a polite-pool identifier. Without an email,
+the Unpaywall source is skipped (arXiv and `citation_pdf_url` still work).
+
+```bash
+# Add an arXiv paper and attach its OA PDF from arxiv.org
+zotero-cli add --arxiv 1706.03762 --attach-pdf
+
+# Add by DOI and attach the OA PDF Unpaywall finds (email required for Unpaywall)
+zotero-cli add --doi 10.1371/journal.pone.0173664 --attach-pdf --email you@example.com
+
+# Add from a URL; the page's citation_pdf_url is used
+zotero-cli add --url https://example.com/article --attach-pdf --output json
+```
+
+日本語: `--attach-pdf` を付けると、item 作成後にオープンアクセス PDF を探して
+（arXiv → Unpaywall → `citation_pdf_url` の順で最初に見つかったもの）添付します。
+Unpaywall は連絡先メールが必須で、`--email` / config の `email` / 環境変数
+`ZOTERO_CLI_EMAIL` の優先順で解決します（メールは秘密情報ではなく識別子です）。
+PDF が見つからない・取得や添付に失敗した場合でも **item 作成は成功**し、添付だけを
+スキップします（`--output json` の `pdfAttached` / `pdfSkipReason` に反映）。PDF を
+添付するのは**新規作成された item のみ**で、`--dry-run` では取得も添付も行いません。
+
 ### Notes
 
 ```bash
