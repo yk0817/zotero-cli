@@ -33,10 +33,14 @@ var (
 	date    = "unknown"
 )
 
-// Config holds the API credentials.
+// Config holds the API credentials and optional settings. Email is the contact
+// address used for the Unpaywall OA lookup (add --attach-pdf); it is optional
+// and omitted from the file when unset. It is not a secret — Unpaywall requires
+// a contact email as a polite-pool identifier, not for authentication.
 type Config struct {
 	APIKey string `json:"api_key"`
 	UserID string `json:"user_id"`
+	Email  string `json:"email,omitempty"`
 }
 
 func configDir() string {
@@ -130,7 +134,13 @@ func main() {
 				}
 			}
 
-			cfg := &Config{APIKey: apiKey, UserID: userID}
+			// Optional: contact email for the Unpaywall OA PDF lookup used by
+			// `add --attach-pdf`. Left blank simply disables that source.
+			fmt.Print("Contact email for Unpaywall OA PDF lookup (optional): ")
+			email, _ := reader.ReadString('\n')
+			email = strings.TrimSpace(email)
+
+			cfg := &Config{APIKey: apiKey, UserID: userID, Email: email}
 			if err := saveConfig(cfg); err != nil {
 				return err
 			}
