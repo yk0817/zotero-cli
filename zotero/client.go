@@ -98,6 +98,42 @@ func (c *Client) doWriteRequest(method, endpoint string, body interface{}) ([]by
 	return respBody, nil
 }
 
+// doPatchRequest sends a PATCH (partial item update) with the optimistic
+// concurrency header Zotero requires. A successful PATCH returns 204 No
+// Content; anything else (412 version conflict, 404, 403) is surfaced so a
+// non-update is never mistaken for success.
+func (c *Client) doPatchRequest(endpoint string, version int, body interface{}) error {
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	u := fmt.Sprintf("%s/users/%s%s", baseURL, c.UserID, endpoint)
+	req, err := http.NewRequest(http.MethodPatch, u, bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to build patch request for %s: %w", endpoint, err)
+	}
+	req.Header.Set("Zotero-API-Key", c.APIKey)
+	req.Header.Set("Zotero-API-Version", "3")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Unmodified-Since-Version", fmt.Sprintf("%d", version))
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("API error (HTTP %d): <response body unreadable: %v>", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("API error (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // SearchItems searches for items by query and optional tag filter.
 func (c *Client) SearchItems(query string, tag string) ([]Item, error) {
 	params := url.Values{}
