@@ -32,7 +32,10 @@ import (
 	"github.com/yk0817/zotero-cli/zotero"
 )
 
-const serverVersion = "0.1.0"
+// version is the server version reported to MCP clients. It defaults to "dev"
+// for local builds and is overridden at release time via
+// -ldflags "-X main.version=<tag>" (see .goreleaser.yaml).
+var version = "dev"
 
 // config mirrors the CLI config file format.
 type config struct {
@@ -344,7 +347,7 @@ func main() {
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "zotero",
-		Version: serverVersion,
+		Version: version,
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{

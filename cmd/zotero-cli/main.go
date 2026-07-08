@@ -24,6 +24,15 @@ import (
 // noteTagPattern strips HTML tags when building a plain-text note preview.
 var noteTagPattern = regexp.MustCompile(`<[^>]*>`)
 
+// Build metadata. Defaults are for local builds; release binaries override them
+// via -ldflags "-X main.version=... -X main.commit=... -X main.date=..."
+// (see .goreleaser.yaml). Surfaced through `zotero-cli --version`.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 // Config holds the API credentials.
 type Config struct {
 	APIKey string `json:"api_key"`
@@ -87,8 +96,9 @@ func newClient() (*zotero.Client, error) {
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "zotero-cli",
-		Short: "Zotero Web API CLI client",
+		Use:     "zotero-cli",
+		Short:   "Zotero Web API CLI client",
+		Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 	}
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
