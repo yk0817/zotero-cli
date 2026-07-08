@@ -232,7 +232,10 @@ order, stopping at the first that yields a valid PDF:
 
 The downloaded bytes are validated to actually be a PDF (`%PDF` signature)
 before attaching, so an HTML paywall/login page returned in place of the file is
-rejected rather than stored.
+rejected rather than stored. Because the PDF URL can come from remote data
+(Unpaywall, or a page's `citation_pdf_url`), the fetch only follows public
+`http(s)` hosts — requests to loopback, private, or link-local addresses are
+refused (SSRF guard), on redirects too.
 
 **Partial failure never fails the command.** If no open-access PDF is available,
 or the download/upload fails, the item is still created — only the attachment is

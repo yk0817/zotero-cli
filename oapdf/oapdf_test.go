@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -299,5 +301,155 @@ func TestFetchPrefersArxivAndShortCircuits(t *testing.T) {
 	}
 	if st.contacted("unpaywall.test") {
 		t.Errorf("Unpaywall must not be contacted once arXiv succeeds, got %v", st.requests)
+	}
+}
+
+// errTransport always fails the round trip, simulating a transport-level error
+// (e.g. connection refused) so a test can inspect the error text get() produces.
+type errTransport struct{}
+
+func (errTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("dial tcp 203.0.113.7:443: connect: connection refused")
+}
+
+// Contract: isBlockedIP is the SSRF allow/deny decision. Loopback, private,
+// link-local (unicast + the 169.254.169.254 cloud-metadata range) and the
+// unspecified address must be blocked; ordinary public addresses must be
+// allowed. A wrong verdict here either lets an attacker probe internal hosts or
+// breaks all real fetches.
+func TestIsBlockedIP(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		{name: "ipv4 loopback", ip: "127.0.0.1", want: true},
+		{name: "ipv6 loopback", ip: "::1", want: true},
+		{name: "private 10/8", ip: "10.1.2.3", want: true},
+		{name: "private 172.16/12", ip: "172.16.5.4", want: true},
+		{name: "private 192.168/16", ip: "192.168.0.1", want: true},
+		{name: "link-local / cloud metadata", ip: "169.254.169.254", want: true},
+		{name: "ipv6 link-local unicast", ip: "fe80::1", want: true},
+		{name: "ipv6 link-local multicast", ip: "ff02::1", want: true},
+		{name: "unique local ipv6", ip: "fd00::1", want: true},
+		{name: "unspecified v4", ip: "0.0.0.0", want: true},
+		{name: "unspecified v6", ip: "::", want: true},
+		{name: "ipv4-mapped loopback", ip: "::ffff:127.0.0.1", want: true},
+		{name: "public dns 1.1.1.1", ip: "1.1.1.1", want: false},
+		{name: "public dns 8.8.8.8", ip: "8.8.8.8", want: false},
+		{name: "public ipv6", ip: "2606:4700:4700::1111", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			if ip == nil {
+				t.Fatalf("bad test IP %q", tt.ip)
+			}
+			if got := isBlockedIP(ip); got != tt.want {
+				t.Errorf("isBlockedIP(%s) = %v, want %v", tt.ip, got, tt.want)
+			}
+		})
+	}
+}
+
+// Contract: the default (production) fetcher refuses to connect to an internal
+// host even when a source URL points there. An httptest server listens on
+// 127.0.0.1, so pointing arXiv at it exercises the real dial guard: the request
+// must be blocked before the server's handler runs, and nothing is attached.
+func TestDefaultFetcherRefusesInternalHost(t *testing.T) {
+	handlerHit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handlerHit = true
+		w.Write([]byte(pdfBytes))
+	}))
+	defer srv.Close()
+
+	f := NewFetcher("") // the guarded default client, not a stub
+	f.ArxivBaseURL = srv.URL
+	data := zotero.ItemData{URL: "https://arxiv.org/abs/2301.01234"}
+
+	res, err := f.Fetch(context.Background(), data, "")
+
+	if res != nil {
+		t.Fatalf("expected no result when the only source is an internal host, got %+v", res)
+	}
+	if err == nil || errors.Is(err, ErrNoOAPDF) {
+		t.Fatalf("expected a hard block error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "SSRF") && !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should explain the internal-host block, got %v", err)
+	}
+	if handlerHit {
+		t.Error("the request reached the internal server; the dial guard did not block it")
+	}
+}
+
+// Contract: a non-http(s) scheme (here delivered via a hostile citation_pdf_url)
+// is refused before any dispatch, so the fetcher cannot be tricked into reading
+// a local file:// path. The dial guard only sees TCP connects, so this must be
+// caught at the URL level.
+func TestFetchRejectsNonHTTPScheme(t *testing.T) {
+	page := `<html><head><meta name="citation_pdf_url" content="file:///etc/passwd"></head></html>`
+	f, _ := newTestFetcher("", map[string]cannedResp{
+		"journal.test/article": {status: 200, body: page, contentType: "text/html"},
+	})
+	data := zotero.ItemData{URL: "https://journal.test/article"}
+
+	res, err := f.Fetch(context.Background(), data, "https://journal.test/article")
+
+	if res != nil {
+		t.Fatalf("expected no result for a file:// PDF URL, got %+v", res)
+	}
+	if err == nil || errors.Is(err, ErrNoOAPDF) {
+		t.Fatalf("expected a scheme-rejection error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "file") || !strings.Contains(err.Error(), "scheme") {
+		t.Errorf("error should name the rejected scheme, got %v", err)
+	}
+}
+
+// Contract: the Unpaywall contact email is a query parameter, so a fetch failure
+// must NOT echo it in the error (which becomes a skip reason printed to stderr
+// and included in --json). The path is kept for diagnosis; the email is not.
+func TestFetchDoesNotLeakEmailOnUnpaywallFailure(t *testing.T) {
+	f := &Fetcher{
+		HTTPClient:       &http.Client{Transport: errTransport{}},
+		UnpaywallBaseURL: "https://unpaywall.test/v2",
+		Email:            "secret-leak@example.com",
+	}
+	data := zotero.ItemData{DOI: "10.1/x"}
+
+	_, err := f.Fetch(context.Background(), data, "")
+
+	if err == nil {
+		t.Fatal("expected an error from the failed Unpaywall fetch")
+	}
+	if strings.Contains(err.Error(), "secret-leak") || strings.Contains(err.Error(), "email=") {
+		t.Errorf("error leaked the contact email: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unpaywall.test/v2/10.1/x") {
+		t.Errorf("error should keep the redacted path for diagnosis, got %v", err)
+	}
+}
+
+// Contract: redactURL removes the query string (which carries the email) while
+// preserving scheme/host/path, and degrades gracefully on an unparseable URL.
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "strips email query", in: "https://api.unpaywall.org/v2/10.1/x?email=me@example.com", want: "https://api.unpaywall.org/v2/10.1/x"},
+		{name: "no query unchanged", in: "https://arxiv.org/pdf/2301.01234", want: "https://arxiv.org/pdf/2301.01234"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactURL(tt.in); got != tt.want {
+				t.Errorf("redactURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

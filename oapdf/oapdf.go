@@ -15,10 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/yk0817/zotero-cli/zotero"
@@ -32,6 +34,8 @@ const (
 
 const (
 	fetchTimeout = 60 * time.Second
+	// dialTimeout bounds a single TCP connect (used by the guarded transport).
+	dialTimeout = 15 * time.Second
 	// maxPDFBytes caps a single download so a hostile or misbehaving server
 	// cannot make the CLI buffer an unbounded body into memory.
 	maxPDFBytes = 100 << 20 // 100 MiB
@@ -77,10 +81,12 @@ type Fetcher struct {
 }
 
 // NewFetcher returns a Fetcher pointed at the public arXiv/Unpaywall endpoints,
-// with a bounded HTTP timeout.
+// with a bounded HTTP timeout and an SSRF-guarded transport (see
+// guardedTransport). The guard lives only in this default client so injected
+// test clients keep dialing nothing.
 func NewFetcher(email string) *Fetcher {
 	return &Fetcher{
-		HTTPClient:       &http.Client{Timeout: fetchTimeout},
+		HTTPClient:       &http.Client{Timeout: fetchTimeout, Transport: guardedTransport()},
 		ArxivBaseURL:     DefaultArxivBaseURL,
 		UnpaywallBaseURL: DefaultUnpaywallBaseURL,
 		Email:            email,
@@ -92,6 +98,54 @@ func (f *Fetcher) httpClient() *http.Client {
 		return f.HTTPClient
 	}
 	return http.DefaultClient
+}
+
+// guardedTransport clones the stdlib default transport and blocks dials to
+// internal addresses. Because PDF URLs come from remote data (Unpaywall's
+// url_for_pdf, a scraped citation_pdf_url) — and because Go follows redirects to
+// any host — an unguarded fetch is an SSRF vector: a hostile URL could point at
+// cloud metadata (169.254.169.254), localhost services, or RFC1918 hosts. The
+// net.Dialer.Control hook runs before every connect (initial request AND each
+// redirect) and sees the concrete resolved IP, so it also closes the
+// resolve-then-connect (DNS-rebinding) gap that a URL-string check would miss.
+func guardedTransport() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: 30 * time.Second,
+		Control:   blockInternalDial,
+	}).DialContext
+	return tr
+}
+
+// blockInternalDial is a net.Dialer.Control hook that refuses to connect to a
+// non-global address. address is the already-resolved ip:port about to be
+// dialed. It fails closed: an unparseable host is blocked.
+func blockInternalDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("blocked dial to %q: %w", address, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("blocked dial to non-IP host %q", host)
+	}
+	if isBlockedIP(ip) {
+		return fmt.Errorf("blocked dial to internal address %s (SSRF guard)", ip)
+	}
+	return nil
+}
+
+// isBlockedIP reports whether ip is one the fetcher must never dial: loopback,
+// private (RFC1918 / ULA), link-local unicast or multicast (covers cloud
+// metadata at 169.254.169.254), or the unspecified address. Kept pure so it is
+// unit-testable without a network.
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
 }
 
 // Fetch locates and downloads an OA PDF for the item, trying arXiv, then
@@ -277,7 +331,21 @@ func looksLikePDF(body []byte) bool {
 // status, and a transport/read error. A non-2xx status is NOT an error here so
 // callers can branch on it (e.g. 404 -> "no OA"); only transport and read
 // failures return err.
+//
+// Only http(s) URLs are fetched: the dial guard sees only TCP connects, so a
+// non-network scheme (file://, gopher://, ...) must be rejected here before
+// dispatch. Every URL placed in an error is redacted (query stripped) so the
+// Unpaywall contact email never leaks into a message that surfaces as a skip
+// reason on stderr or in --json.
 func (f *Fetcher) get(ctx context.Context, rawURL, accept string) ([]byte, int, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid URL %q: %w", redactURL(rawURL), err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, 0, fmt.Errorf("refusing to fetch non-http(s) URL %q (scheme %q)", redactURL(rawURL), parsed.Scheme)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, 0, err
@@ -289,16 +357,44 @@ func (f *Fetcher) get(ctx context.Context, rawURL, accept string) ([]byte, int, 
 
 	resp, err := f.httpClient().Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("request to %s failed: %w", rawURL, err)
+		// client.Do returns a *url.Error whose message embeds the full request
+		// URL (including the email query); unwrap it to the underlying cause so
+		// only the redacted URL is shown.
+		return nil, 0, fmt.Errorf("request to %s failed: %w", redactURL(rawURL), stripURLError(err))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPDFBytes+1))
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", rawURL, err)
+		return nil, resp.StatusCode, fmt.Errorf("reading response from %s: %w", redactURL(rawURL), err)
 	}
 	if len(body) > maxPDFBytes {
-		return nil, resp.StatusCode, fmt.Errorf("response from %s exceeds %d bytes", rawURL, maxPDFBytes)
+		return nil, resp.StatusCode, fmt.Errorf("response from %s exceeds %d bytes", redactURL(rawURL), maxPDFBytes)
 	}
 	return body, resp.StatusCode, nil
+}
+
+// stripURLError unwraps a *url.Error to its underlying cause. A *url.Error's own
+// message includes the request URL verbatim (which may carry the email query),
+// so wrapping the cause instead keeps that URL out of error text while
+// preserving the errors.Is/As chain to the real failure.
+func stripURLError(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) && uerr.Err != nil {
+		return uerr.Err
+	}
+	return err
+}
+
+// redactURL strips the query string from a URL so secrets carried there (the
+// Unpaywall email) never appear in error text. The path is kept for diagnosis.
+func redactURL(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil {
+		u.RawQuery = ""
+		return u.String()
+	}
+	if i := strings.IndexByte(rawURL, '?'); i >= 0 {
+		return rawURL[:i]
+	}
+	return rawURL
 }
