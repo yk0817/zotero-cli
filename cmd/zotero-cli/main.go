@@ -1079,9 +1079,8 @@ func main() {
 				return err
 			}
 
-			result := zotero.ApplyTagDelta(item.Data.Tags, tagAdd, tagRemove)
-
 			if tagDryRun {
+				result := zotero.ApplyTagDelta(item.Data.Tags, tagAdd, tagRemove)
 				if isJSON() {
 					return printJSON(tagDryRunPayload(args[0], tagAdd, tagRemove, result))
 				}
@@ -1097,6 +1096,8 @@ func main() {
 				return nil
 			}
 
+			// UpdateItemTags computes the same delta internally (ApplyTagDelta
+			// is pure, so there is no dry-run-only precomputation to reuse here).
 			updated, err := client.UpdateItemTags(item, tagAdd, tagRemove)
 			if err != nil {
 				return err
