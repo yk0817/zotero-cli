@@ -1,0 +1,38 @@
+name: release
+
+# Push a version tag to cut a release:
+#   git tag v0.2.0
+#   git push origin v0.2.0
+# GoReleaser then cross-builds both binaries, publishes a GitHub Release with
+# checksums, and (if HOMEBREW_TAP_TOKEN is set) updates the Homebrew tap.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # create the Release and upload assets via GITHUB_TOKEN
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so the changelog can be built
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with contents:write on yk0817/homebrew-tap. Optional:
+          # when unset, the release still ships binaries + checksums and only the
+          # Homebrew cask push is skipped (see .goreleaser.yaml skip_upload).
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
