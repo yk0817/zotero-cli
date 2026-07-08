@@ -597,6 +597,11 @@ do not update the Homebrew tap.
    push the cask to the tap. Until it is set, releases still ship binaries and
    `checksums.txt`; only the `brew install` path is unavailable.
 
+Do steps 1→3 in order: once the token exists, a stable release *attempts* the
+tap push, so if the `yk0817/homebrew-tap` repo does not exist yet that step
+fails the job (the binaries and `checksums.txt` are still published — only the
+cask push errors). Create the repo before adding the secret.
+
 Validate the config locally without publishing anything:
 
 ```bash

@@ -25,6 +25,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Gate the release on the test suite so a tag pushed on a red commit
+      # cannot publish a broken binary + Homebrew cask. Tags can point at any
+      # commit, not only ones that already passed the `test` workflow.
+      - name: Test
+        run: go test -race ./...
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
