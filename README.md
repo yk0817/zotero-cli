@@ -4,16 +4,49 @@ A command-line client and Go library for the [Zotero Web API](https://www.zotero
 
 ## Installation
 
+Every path below ships **both** binaries: the `zotero-cli` command and the
+`zotero-mcp` MCP server.
+
+### Homebrew (macOS)
+
 ```bash
-go install zotero-cli/cmd/zotero-cli@latest
+brew install yk0817/tap/zotero-cli
 ```
 
-Or build from source:
+Installs `zotero-cli` and `zotero-mcp`; upgrade later with `brew upgrade zotero-cli`.
+
+### Prebuilt binary (macOS / Linux / Windows)
+
+Download the archive for your OS/arch from the
+[latest release](https://github.com/yk0817/zotero-cli/releases/latest), extract
+it, and put the binaries on your `PATH`. Example for macOS arm64:
+
+```bash
+VERSION=0.2.0   # match the release tag (without the leading v)
+curl -sSL -o zotero-cli.tar.gz \
+  "https://github.com/yk0817/zotero-cli/releases/download/v${VERSION}/zotero-cli_${VERSION}_darwin_arm64.tar.gz"
+tar xzf zotero-cli.tar.gz
+sudo mv zotero-cli zotero-mcp /usr/local/bin/
+```
+
+The release includes a `checksums.txt` to verify downloads (`shasum -a 256 -c`).
+
+### `go install`
+
+```bash
+go install github.com/yk0817/zotero-cli/cmd/zotero-cli@latest
+go install github.com/yk0817/zotero-cli/cmd/zotero-mcp@latest
+```
+
+Requires Go 1.26+. Binaries land in `$(go env GOPATH)/bin`.
+
+### From source
 
 ```bash
 git clone https://github.com/yk0817/zotero-cli.git
 cd zotero-cli
 go build -o zotero-cli ./cmd/zotero-cli/
+go build -o zotero-mcp ./cmd/zotero-mcp/
 ```
 
 ## Setup
@@ -271,7 +304,7 @@ func main() {
 
 `cmd/zotero-mcp` is an [MCP](https://modelcontextprotocol.io/) server that exposes the same `zotero` package over stdio. It reuses the CLI config (`~/.config/zotero-cli/config.json`), so run `zotero-cli config` first.
 
-### Build
+The Homebrew, prebuilt-binary, and `go install` paths above already install `zotero-mcp` alongside `zotero-cli` — if you used one of those, it is already on your `PATH` and you can skip the build step. To build it from a source checkout instead:
 
 ```bash
 go build -o zotero-mcp ./cmd/zotero-mcp/
@@ -279,9 +312,13 @@ go build -o zotero-mcp ./cmd/zotero-mcp/
 
 ### Setup (Claude Code — CLI & VS Code)
 
-Register the server once with the CLI. The terminal CLI and the **VS Code extension share the same MCP config**, so this covers both — the extension can't add servers itself; once registered you manage it from the extension's `/mcp` panel. Use user scope so it's available in every project:
+Register the server once with the CLI. The terminal CLI and the **VS Code extension share the same MCP config**, so this covers both — the extension can't add servers itself; once registered you manage it from the extension's `/mcp` panel. Use user scope so it's available in every project. If `zotero-mcp` is on your `PATH` (Homebrew / prebuilt binary / `go install`), reference it by name; otherwise point at the built binary by absolute path:
 
 ```bash
+# zotero-mcp on PATH
+claude mcp add --scope user zotero -- zotero-mcp
+
+# or a source build by absolute path
 claude mcp add --scope user zotero -- ~/zotero-cli/zotero-mcp
 ```
 
@@ -532,6 +569,53 @@ Three layers keep it honest:
 日本語: コマンド表は `zotero-cli schema` から自動生成される。マーカー間は手で
 編集せず、`cmd/zotero-cli/` の定義を直して再生成する。push 前フック・CI・手動
 コマンドの3層でズレを防ぐ。
+
+## Releasing
+
+Releases are automated with [GoReleaser](https://goreleaser.com/)
+(`.goreleaser.yaml` + `.github/workflows/release.yml`). The only manual step per
+version is pushing a tag:
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+On a `v*` tag, GitHub Actions cross-builds both binaries (macOS/Linux/Windows ×
+amd64/arm64), publishes a GitHub Release with a per-platform archive (each
+bundling `zotero-cli` + `zotero-mcp`) and `checksums.txt`, and — if the Homebrew
+tap token is configured — updates the tap. `go install` needs nothing extra once
+the tag exists. Prerelease tags (e.g. `v0.2.0-rc1`) are marked as prereleases and
+do not update the Homebrew tap.
+
+**One-time setup for the Homebrew tap** (not per release):
+
+1. Create the tap repo `yk0817/homebrew-tap` (public, empty).
+2. Create a fine-grained PAT with **Contents: read/write** scoped to that repo.
+3. Add it to this repo as the `HOMEBREW_TAP_TOKEN` Actions secret. The default
+   `GITHUB_TOKEN` can only write to this repo, so a separate token is required to
+   push the cask to the tap. Until it is set, releases still ship binaries and
+   `checksums.txt`; only the `brew install` path is unavailable.
+
+Do steps 1→3 in order: once the token exists, a stable release *attempts* the
+tap push, so if the `yk0817/homebrew-tap` repo does not exist yet that step
+fails the job (the binaries and `checksums.txt` are still published — only the
+cask push errors). Create the repo before adding the secret.
+
+Validate the config locally without publishing anything:
+
+```bash
+goreleaser check                        # lint .goreleaser.yaml
+goreleaser release --snapshot --clean   # full cross-build into ./dist, no upload
+```
+
+日本語: リリースは GoReleaser で自動化。バージョンごとの手作業は**タグ push の
+1コマンドだけ**で、以降はクロスビルド・Release 作成・チェックサム・Homebrew tap
+更新まで GitHub Actions が実行する。Homebrew tap は初回のみ、tap リポ
+`yk0817/homebrew-tap` と `HOMEBREW_TAP_TOKEN`（当該リポへの Contents 書き込み権
+限を持つ fine-grained PAT）の用意が必要。未設定でもバイナリ配布は動き、`brew`
+経路だけが無効になる。ローカル検証は `goreleaser check` と
+`goreleaser release --snapshot --clean`。
 
 ## License
 

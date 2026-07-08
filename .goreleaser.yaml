@@ -1,0 +1,108 @@
+# GoReleaser config — cross-builds both binaries, publishes a GitHub Release
+# with checksums, and updates the Homebrew tap. Triggered by a tag push
+# (see .github/workflows/release.yml).
+#
+# Validate locally without releasing:
+#   goreleaser check
+#   goreleaser build --snapshot --clean
+version: 2
+
+project_name: zotero-cli
+
+before:
+  hooks:
+    # Non-mutating: populate the module cache without altering go.mod/go.sum
+    # mid-release, so the tag is built exactly as committed.
+    - go mod download
+
+builds:
+  - id: zotero-cli
+    main: ./cmd/zotero-cli
+    binary: zotero-cli
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+  - id: zotero-mcp
+    main: ./cmd/zotero-mcp
+    binary: zotero-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+
+# One archive per platform bundling BOTH binaries, so a single install
+# (Homebrew formula or downloaded tarball) provides zotero-cli and zotero-mcp.
+archives:
+  - id: default
+    ids: [zotero-cli, zotero-mcp]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+# Homebrew tap. Upstream deprecated `brews` (formulae) in favor of casks for
+# prebuilt binaries, so this ships a cask that installs BOTH binaries.
+homebrew_casks:
+  - name: zotero-cli
+    ids: [default]
+    binaries: [zotero-cli, zotero-mcp]
+    repository:
+      owner: yk0817
+      name: homebrew-tap
+      # Fine-grained PAT with contents:write on yk0817/homebrew-tap. The default
+      # GITHUB_TOKEN cannot push to another repo, so this is required (see the
+      # release workflow and README install docs).
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/yk0817/zotero-cli"
+    description: "Command-line client and MCP server for the Zotero Web API"
+    license: MIT
+    # Skip the tap commit when the token is absent (tap not set up yet), and for
+    # prereleases (e.g. v1.2.3-rc1) / snapshots. This lets the binary Release and
+    # `go install` work before the Homebrew tap exists — only stable tags with a
+    # token push the cask.
+    skip_upload: '{{ if .Env.HOMEBREW_TAP_TOKEN }}auto{{ else }}true{{ end }}'
+    # The binaries are unsigned, so macOS Gatekeeper would quarantine them and
+    # show "damaged and cannot be opened". Strip the quarantine attribute on
+    # install so `brew install` yields a runnable binary.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/zotero-cli"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/zotero-mcp"]
+          end
+
+release:
+  github:
+    owner: yk0817
+    name: zotero-cli
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
