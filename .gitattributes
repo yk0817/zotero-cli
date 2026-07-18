@@ -1,0 +1,5 @@
+# Collapse generated / machine-maintained files in GitHub diffs so reviewers
+# focus on hand-written changes. These stay in the repo and can still be
+# expanded in the PR view; they just don't count toward language stats and are
+# folded by default.
+go.sum linguist-generated=true
