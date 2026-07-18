@@ -184,6 +184,37 @@ func (c *Client) ListItems(collectionKey string, limit int) ([]Item, error) {
 	return items, nil
 }
 
+// ListAllItems enumerates every top-level item in the library (excluding
+// attachments and notes), following pagination until a short page. Unlike
+// ListItems, it does not stop at one page — the semantic index must be built
+// over the whole library, not the API's default first page.
+func (c *Client) ListAllItems() ([]Item, error) {
+	const pageSize = 100
+	var all []Item
+	for start := 0; ; start += pageSize {
+		params := url.Values{}
+		params.Set("limit", fmt.Sprintf("%d", pageSize))
+		params.Set("start", fmt.Sprintf("%d", start))
+		params.Set("sort", "dateModified")
+		params.Set("direction", "desc")
+		params.Set("itemType", "-attachment || note")
+
+		body, err := c.doRequest("/items", params, "application/json")
+		if err != nil {
+			return nil, err
+		}
+		var page []Item
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON: %w", err)
+		}
+		all = append(all, page...)
+		if len(page) < pageSize {
+			break
+		}
+	}
+	return all, nil
+}
+
 // GetItem retrieves a single item by key.
 func (c *Client) GetItem(itemKey string) (*Item, error) {
 	body, err := c.doRequest(fmt.Sprintf("/items/%s", itemKey), nil, "application/json")
