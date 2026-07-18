@@ -92,6 +92,7 @@ The table below is generated from `zotero-cli schema` and kept in sync by
 | `tag` | Add or remove tags on an item | itemKey: 8-character alphanumeric item key (required) |
 | `tags` | List all tags in the library (closed vocabulary source) | none |
 | `upload` | Upload a file as an attachment | filePath: path to the file to upload (required) |
+| `version` | Show version, commit, and build date | none |
 
 <!-- END AUTO-GENERATED COMMANDS -->
 
