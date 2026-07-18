@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -44,37 +45,55 @@ func newSchemaCmd(root *cobra.Command) *cobra.Command {
 	}
 }
 
+// buildSchemas walks the command tree and returns one entry per runnable
+// command, recursing into subcommands so nested commands (e.g. `index build`)
+// are individually discoverable. Pure parent groups such as `index` have no
+// RunE; they are not emitted as entries but are still recursed into.
 func buildSchemas(root *cobra.Command) []CommandSchema {
 	var schemas []CommandSchema
-	for _, cmd := range root.Commands() {
-		if cmd.Hidden || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "schema" {
-			continue
-		}
-		s := CommandSchema{
-			Name:        cmd.Name(),
-			Description: cmd.Short,
-			Usage:       cmd.UseLine(),
-		}
-		if ann, ok := cmd.Annotations["args"]; ok {
-			s.Args = ann
-		}
-		cmd.Flags().VisitAll(func(f *pflag.Flag) {
-			if f.Hidden {
-				return
+	var walk func(parent *cobra.Command)
+	walk = func(parent *cobra.Command) {
+		for _, cmd := range parent.Commands() {
+			if cmd.Hidden || cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "schema" {
+				continue
 			}
-			fs := FlagSchema{
-				Name:        f.Name,
-				Shorthand:   f.Shorthand,
-				Type:        f.Value.Type(),
-				Default:     f.DefValue,
-				Description: f.Usage,
+			if cmd.Runnable() {
+				schemas = append(schemas, commandSchema(root, cmd))
 			}
-			if ann, ok := cmd.Annotations["required_"+f.Name]; ok && ann == "true" {
-				fs.Required = true
-			}
-			s.Flags = append(s.Flags, fs)
-		})
-		schemas = append(schemas, s)
+			walk(cmd)
+		}
 	}
+	walk(root)
 	return schemas
+}
+
+// commandSchema builds the machine-readable description of a single command. The
+// name is the command's path relative to the root (e.g. "index build"), so
+// nested commands are unambiguous.
+func commandSchema(root, cmd *cobra.Command) CommandSchema {
+	s := CommandSchema{
+		Name:        strings.TrimPrefix(cmd.CommandPath(), root.Name()+" "),
+		Description: cmd.Short,
+		Usage:       cmd.UseLine(),
+	}
+	if ann, ok := cmd.Annotations["args"]; ok {
+		s.Args = ann
+	}
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden {
+			return
+		}
+		fs := FlagSchema{
+			Name:        f.Name,
+			Shorthand:   f.Shorthand,
+			Type:        f.Value.Type(),
+			Default:     f.DefValue,
+			Description: f.Usage,
+		}
+		if ann, ok := cmd.Annotations["required_"+f.Name]; ok && ann == "true" {
+			fs.Required = true
+		}
+		s.Flags = append(s.Flags, fs)
+	})
+	return s
 }
