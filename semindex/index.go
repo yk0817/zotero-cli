@@ -72,7 +72,9 @@ func (idx *Index) Save(path string) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	// 0600 to match config.json — the index is derived from the user's library
+	// and lives under the same private config dir.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

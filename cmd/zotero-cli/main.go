@@ -191,6 +191,16 @@ func main() {
 			}
 
 			if searchSemanticFlag {
+				// --tag/--title are keyword-search filters; they have no effect on
+				// the semantic path, so reject the combination instead of silently
+				// ignoring them.
+				if searchTag != "" || searchTitle {
+					return &CLIError{
+						Code:       ErrCodeInvalidArgument,
+						Message:    "--tag/--title cannot be combined with --semantic",
+						Suggestion: "Use a keyword search for --tag/--title, or --semantic on its own",
+					}
+				}
 				return runSemanticSearch(cmd.Context(), query, searchLimit)
 			}
 

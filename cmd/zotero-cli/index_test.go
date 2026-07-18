@@ -146,3 +146,34 @@ func TestUpdateIndexIncremental(t *testing.T) {
 		}
 	}
 }
+
+// Contract: an existing indexed item whose title+abstract become empty drops out
+// of the index and is counted as removed. The reported stats must account for
+// every entry that left the index, not only items deleted from the library —
+// otherwise a silent dropout is invisible to a caller trusting the counts.
+func TestUpdateIndexCountsEmptiedItemAsRemoved(t *testing.T) {
+	existing := &semindex.Index{
+		Header: semindex.Header{SchemaVersion: semindex.SchemaVersion, LibraryID: "u", Model: "m", Dim: 1},
+		Entries: []semindex.Entry{
+			{ItemKey: "EMPTIED", Version: 1, Title: "had text", Vector: []float32{1}},
+		},
+	}
+	// Same item, version bumped, but title/abstract are now empty.
+	lister := fakeLister{items: []zotero.Item{item("EMPTIED", 2, "", "")}}
+	emb := &fakeEmbedder{}
+
+	idx, stats, err := updateIndex(context.Background(), lister, emb, existing, 64)
+
+	if err != nil {
+		t.Fatalf("updateIndex: %v", err)
+	}
+	if emb.embedded != 0 {
+		t.Errorf("embedded %d, want 0 (nothing to embed)", emb.embedded)
+	}
+	if stats.Removed != 1 || stats.Added != 0 || stats.Updated != 0 {
+		t.Errorf("stats = %+v, want removed1 added0 updated0", stats)
+	}
+	if len(idx.Entries) != 0 {
+		t.Errorf("entries = %d, want 0 (emptied item dropped)", len(idx.Entries))
+	}
+}

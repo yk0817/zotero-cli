@@ -109,18 +109,26 @@ func updateIndex(ctx context.Context, lister itemLister, emb embed.Embedder, exi
 	}
 
 	toEmbed, keep, removed := existing.Diff(refs)
+	removedCount := len(removed)
 
 	// Embed only items that still have text; a changed item that lost its text
-	// falls out of the index (not carried over).
+	// falls out of the index (not carried over). If such an item was previously
+	// indexed, its disappearance is a removal — count it, so the reported stats
+	// account for every entry that left the index, not just items deleted from
+	// the library.
 	var texts []string
 	var embItems []zotero.Item
 	added, updated := 0, 0
 	for _, key := range toEmbed {
 		it := byKey[key]
-		if embedText(it) == "" {
+		txt := embedText(it)
+		if txt == "" {
+			if oldKeys[key] {
+				removedCount++
+			}
 			continue
 		}
-		texts = append(texts, embedText(it))
+		texts = append(texts, txt)
 		embItems = append(embItems, it)
 		if oldKeys[key] {
 			updated++
@@ -152,7 +160,7 @@ func updateIndex(ctx context.Context, lister itemLister, emb embed.Embedder, exi
 	stats := updateStats{
 		Added:     added,
 		Updated:   updated,
-		Removed:   len(removed),
+		Removed:   removedCount,
 		Unchanged: len(keep),
 		Total:     len(merged),
 	}
