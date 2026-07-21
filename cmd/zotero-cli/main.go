@@ -41,6 +41,12 @@ type Config struct {
 	APIKey string `json:"api_key"`
 	UserID string `json:"user_id"`
 	Email  string `json:"email,omitempty"`
+	// EmbedBaseURL and EmbedModel configure the embedding backend for semantic
+	// search (index build / search --semantic). Both are optional; blank uses the
+	// local defaults (see semantic.go). Neither is a secret — the API key is read
+	// only from $ZOTERO_EMBED_API_KEY and never stored here.
+	EmbedBaseURL string `json:"embed_base_url,omitempty"`
+	EmbedModel   string `json:"embed_model,omitempty"`
 }
 
 func configDir() string {
@@ -140,7 +146,18 @@ func main() {
 			email, _ := reader.ReadString('\n')
 			email = strings.TrimSpace(email)
 
-			cfg := &Config{APIKey: apiKey, UserID: userID, Email: email}
+			// Optional: embedding backend for semantic search. Blank keeps the
+			// local defaults (Ollama). The API key is NOT prompted — it comes only
+			// from $ZOTERO_EMBED_API_KEY so it is never written to config.json.
+			fmt.Print("Embedding base URL for semantic search (optional, blank = local Ollama default): ")
+			embedURL, _ := reader.ReadString('\n')
+			embedURL = strings.TrimSpace(embedURL)
+
+			fmt.Print("Embedding model (optional, blank = nomic-embed-text): ")
+			embedMdl, _ := reader.ReadString('\n')
+			embedMdl = strings.TrimSpace(embedMdl)
+
+			cfg := &Config{APIKey: apiKey, UserID: userID, Email: email, EmbedBaseURL: embedURL, EmbedModel: embedMdl}
 			if err := saveConfig(cfg); err != nil {
 				return err
 			}
@@ -158,6 +175,8 @@ func main() {
 	// search command
 	var searchTag string
 	var searchTitle bool
+	var searchSemanticFlag bool
+	var searchLimit int
 	searchCmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search items by keyword",
@@ -166,12 +185,27 @@ func main() {
 			"args": "query: search keyword (required)",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newClient()
-			if err != nil {
-				return err
-			}
 			query := strings.Join(args, " ")
 			if err := sanitizeInput(query); err != nil {
+				return err
+			}
+
+			if searchSemanticFlag {
+				// --tag/--title are keyword-search filters; they have no effect on
+				// the semantic path, so reject the combination instead of silently
+				// ignoring them.
+				if searchTag != "" || searchTitle {
+					return &CLIError{
+						Code:       ErrCodeInvalidArgument,
+						Message:    "--tag/--title cannot be combined with --semantic",
+						Suggestion: "Use a keyword search for --tag/--title, or --semantic on its own",
+					}
+				}
+				return runSemanticSearch(cmd.Context(), query, searchLimit)
+			}
+
+			client, err := newClient()
+			if err != nil {
 				return err
 			}
 			items, err := client.SearchItems(query, searchTag)
@@ -204,6 +238,8 @@ func main() {
 	}
 	searchCmd.Flags().StringVar(&searchTag, "tag", "", "Filter by tag")
 	searchCmd.Flags().BoolVar(&searchTitle, "title", false, "Filter by title only")
+	searchCmd.Flags().BoolVar(&searchSemanticFlag, "semantic", false, "Semantic (embedding) search over the local index instead of keyword search")
+	searchCmd.Flags().IntVar(&searchLimit, "limit", 10, "Max results (semantic search)")
 
 	// list command
 	var listCollection string
@@ -1133,9 +1169,12 @@ func main() {
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
+	// index command (semantic search index management)
+	indexCmd := newIndexCmd()
+
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
 		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
-		tagsCmd, tagCmd, citationsCmd, addCmd, schemaCmd)
+		tagsCmd, tagCmd, citationsCmd, addCmd, schemaCmd, indexCmd)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

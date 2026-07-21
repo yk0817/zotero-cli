@@ -34,6 +34,7 @@
 - [ ] **JSON エンベロープ**: `--output json` は `{"ok":true,"data":...}` / `{"ok":false,"error":{...}}` を守るか。空結果は `data: []`（null 禁止）
 - [ ] **空文字列禁止**: ツール/コマンドの結果が**空文字列にならない**か。0件なら「No results found」等の明示メッセージ（LLM は空応答を故障と区別できない）
 - [ ] **誤読防止ヒント**: アノテーション0件には同期ヒントを出すか（「マークなし」と誤読させない。実例: [MEMORY] annotations 0件をバグと誤認）
+- [ ] **ランク出力の順序・件数**: 意味検索（`search --semantic`）は cosine 類似度で**降順ソート**され `--limit` で切り詰められるか。空インデックスは「index が空・build せよ」の明示メッセージ（空 `[]`/空文字列で返さない）
 
 ## P2: フィルタ・整形
 
@@ -63,3 +64,4 @@
 | 同種データの JSON 形不一致 | `tag` の出力 tags が `[]string` で、`get`/`context` の `[]Tag` と形が違った（PR #12） | `TestTagResultPayloadShape` |
 | 単一行語彙への空白系制御文字混入 | `validateTags` が `\n`/`\t` を許し、タブ入りタグが `tags` 表示を崩した（PR #12） | `TestValidateTags` |
 | タイトル検索の誤同定（無関係論文を found=true で採用） | `searchPaperID` が `limit=1` のトップヒットをタイトル一致を確認せず返し、汎用的な短いタイトル（例 "Introduction"）で無関係論文の引用ネットワークを黙って構築していた（issue #16） | `TestResolvePaperIDRejectsUnrelatedTitleHit` / `TestResolvePaperIDScansCandidatesForMatch` / `TestResolvePaperIDMatchesDespiteCaseAndPunctuation` |
+| 全ライブラリ列挙のページ切り捨て | `ListItems` は1ページ（≤100）しか返さず、そのまま意味検索インデックスを組むと部分ライブラリで構築される恐れ（issue #27・GetChildren と同クラス） | `TestListAllItemsPaginates` |

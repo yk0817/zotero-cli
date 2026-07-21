@@ -87,6 +87,9 @@ The table below is generated from `zotero-cli schema` and kept in sync by
 | `fullsearch` | Full-text search | query: search keyword (required) |
 | `fulltext` | Show full text of an item | itemKey: 8-character alphanumeric item key (required) |
 | `get` | Show item details | itemKey: 8-character alphanumeric item key (required) |
+| `index build` | Build the semantic index from all library items (title + abstract) | none |
+| `index status` | Show semantic index metadata (path, item count, model) | none |
+| `index update` | Incrementally update the semantic index (only changed items) | none |
 | `list` | List items | none |
 | `search` | Search items by keyword | query: search keyword (required) |
 | `tag` | Add or remove tags on an item | itemKey: 8-character alphanumeric item key (required) |
@@ -123,6 +126,42 @@ zotero-cli list --collection ZVUDP75D --limit 10
 # Full-text search
 zotero-cli fullsearch "transformer architecture"
 ```
+
+### Semantic Search (local, optional)
+
+`search --semantic` ranks library items by meaning, not keywords, using a local
+vector index built from each item's title + abstract.
+
+```bash
+# One-time (and after adding papers) — build / refresh the index:
+zotero-cli index build
+zotero-cli index update     # incremental: only re-embeds changed items
+zotero-cli index status     # show index metadata
+
+# Search by concept:
+zotero-cli search --semantic "temporal edges in dynamic knowledge graphs" --limit 10 --output json
+```
+
+Embeddings come from an OpenAI-compatible endpoint. **The default is local**
+(Ollama at `http://localhost:11434/v1`, model `nomic-embed-text`) — no key or
+cloud needed:
+
+```bash
+ollama pull nomic-embed-text   # once
+```
+
+To use a different or remote backend, set `embed_base_url` / `embed_model` via
+`zotero-cli config`, and (for a remote API) export `ZOTERO_EMBED_API_KEY`. The key
+is read only from the environment and is never written to `config.json`.
+
+Semantic results are `{itemKey, title, score}` ranked by cosine similarity; use
+`zotero-cli get <itemKey>` for full details.
+
+日本語: `search --semantic` は title+abstract から作ったローカルのベクトル
+インデックスで、キーワードでなく意味で並べ替える。既定はローカル（Ollama）で鍵不要。
+`index build` / `index update`（変更分だけ）/ `index status` でインデックスを管理する。
+埋め込みバックエンドは `embed_base_url` / `embed_model`（config）で切替可、API キーは
+`ZOTERO_EMBED_API_KEY`（env のみ・config には保存しない）。
 
 ### Item Details
 
