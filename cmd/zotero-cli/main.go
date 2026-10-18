@@ -102,7 +102,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:     "zotero-cli",
 		Short:   "Zotero Web API CLI client",
-		Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
+		Version: versionString(),
 	}
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
@@ -1133,9 +1133,12 @@ func main() {
 	// schema command
 	schemaCmd := newSchemaCmd(rootCmd)
 
+	// version command
+	versionCmd := newVersionCmd()
+
 	rootCmd.AddCommand(configCmd, searchCmd, listCmd, getCmd, bibtexCmd, collectionsCmd,
 		fulltextCmd, fullsearchCmd, annotationsCmd, contextCmd, addNoteCmd, deleteNoteCmd, exportCmd, uploadCmd,
-		tagsCmd, tagCmd, citationsCmd, addCmd, schemaCmd)
+		tagsCmd, tagCmd, citationsCmd, addCmd, schemaCmd, versionCmd)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
